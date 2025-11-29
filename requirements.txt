@@ -5,6 +5,7 @@ psycopg2-binary==2.9.9
 redis==5.0.1
 aioredis==2.0.1
 yt-dlp==2024.8.6
+yt-dlp-ejs
 mutagen==1.47.0
 python-multipart==0.0.6
 pydantic==2.5.3
