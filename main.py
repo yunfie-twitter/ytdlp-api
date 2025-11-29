@@ -34,6 +34,8 @@ app.add_middleware(
 class DownloadRequest(BaseModel):
     url: HttpUrl
     format: str = "mp4"  # mp3, mp4, best, audio, video, webm, wav, flac, aac
+    format_id: Optional[str] = None  # yt-dlpの特定フォーマットID (例: "137+140")
+    quality: Optional[str] = None  # 画質指定 (例: "1080p", "720p", "best", "worst")
     mp3_title: Optional[str] = None
     embed_thumbnail: bool = False
 
@@ -55,6 +57,15 @@ class TaskStatusResponse(BaseModel):
     created_at: datetime
     completed_at: Optional[datetime] = None
 
+class FormatOption(BaseModel):
+    format_id: str
+    resolution: str
+    ext: str
+    filesize: Optional[int] = None
+    fps: Optional[int] = None
+    vcodec: Optional[str] = None
+    acodec: Optional[str] = None
+
 class VideoInfoResponse(BaseModel):
     title: str
     thumbnail: Optional[str] = None
@@ -62,7 +73,10 @@ class VideoInfoResponse(BaseModel):
     view_count: int
     like_count: int
     uploader: str
-    formats: List[dict]
+    upload_date: Optional[str] = None
+    formats: List[FormatOption]
+    available_qualities: List[str]  # 利用可能な画質一覧
+    available_audio_formats: List[str]  # 利用可能な音声フォーマット一覧
 
 # Startup/Shutdown
 @app.on_event("startup")
@@ -119,6 +133,8 @@ async def create_download(
         task_id = await download_service.create_task(
             url=str(request.url),
             format_type=request.format,
+            format_id=request.format_id,
+            quality=request.quality,
             ip_address=ip,
             mp3_title=request.mp3_title,
             embed_thumbnail=request.embed_thumbnail
@@ -215,6 +231,9 @@ async def download_file(
     db = Depends(get_db)
 ):
     """Download the completed file"""
+    import os
+    from pathlib import Path
+    
     task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
     
     if not task:
@@ -223,12 +242,27 @@ async def download_file(
     if task.status != "completed":
         raise HTTPException(status_code=400, detail="Task not completed yet")
     
-    if not task.file_path:
+    if not task.file_path or not os.path.exists(task.file_path):
         raise HTTPException(status_code=404, detail="File not found")
+    
+    # タイトルベースのファイル名を生成
+    if task.title:
+        # ファイル名として使用できない文字を削除
+        safe_title = "".join(c for c in task.title if c.isalnum() or c in (' ', '-', '_')).strip()
+        # 長すぎる場合は切り詰め
+        if len(safe_title) > 200:
+            safe_title = safe_title[:200]
+        
+        # 拡張子を取得
+        original_ext = Path(task.file_path).suffix
+        download_filename = f"{safe_title}{original_ext}"
+    else:
+        # タイトルがない場合は元のファイル名を使用
+        download_filename = task.filename or f"{task_id}.mp4"
     
     return FileResponse(
         path=task.file_path,
-        filename=task.filename,
+        filename=download_filename,
         media_type="application/octet-stream"
     )
 
