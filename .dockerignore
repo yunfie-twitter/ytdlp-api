@@ -1,0 +1,17 @@
+.env
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+downloads/
+*.md
+.vscode/
+.idea/
+LICENSE
+examples/
