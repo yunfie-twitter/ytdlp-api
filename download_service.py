@@ -3,7 +3,8 @@ import os
 import uuid
 import json
 import re
-from typing import Optional, Dict
+import shutil
+from typing import Optional, Dict, List
 from datetime import datetime
 from pathlib import Path
 from mutagen.mp3 import MP3
@@ -21,6 +22,74 @@ class DownloadService:
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.active_processes: Dict[str, asyncio.subprocess.Process] = {}
     
+    def _get_gpu_encoder_args(self) -> List[str]:
+        """Get GPU encoder arguments based on configuration"""
+        if not settings.ENABLE_GPU_ENCODING:
+            return []
+        
+        encoder_type = settings.GPU_ENCODER_TYPE.lower()
+        preset = settings.GPU_ENCODER_PRESET
+        
+        # Auto-detect available encoder
+        if encoder_type == "auto":
+            if shutil.which("nvidia-smi"):
+                encoder_type = "nvenc"
+            elif os.path.exists("/dev/dri"):
+                encoder_type = "vaapi"
+            else:
+                return []  # No GPU encoder available
+        
+        postprocessor_args = []
+        
+        if encoder_type == "nvenc":
+            # NVIDIA NVENC encoder
+            postprocessor_args = [
+                "-c:v", "h264_nvenc",
+                "-preset", preset,
+                "-b:v", "5M"
+            ]
+        elif encoder_type == "vaapi":
+            # AMD/Intel VAAPI encoder
+            postprocessor_args = [
+                "-vaapi_device", "/dev/dri/renderD128",
+                "-vf", "format=nv12,hwupload",
+                "-c:v", "h264_vaapi",
+                "-b:v", "5M"
+            ]
+        elif encoder_type == "qsv":
+            # Intel Quick Sync Video
+            postprocessor_args = [
+                "-c:v", "h264_qsv",
+                "-preset", preset,
+                "-b:v", "5M"
+            ]
+        
+        return postprocessor_args
+    
+    def _get_aria2_args(self) -> List[str]:
+        """Get aria2 external downloader arguments"""
+        if not settings.ENABLE_ARIA2:
+            return []
+        
+        return [
+            "--external-downloader", "aria2c",
+            "--external-downloader-args",
+            f"aria2c:-x {settings.ARIA2_MAX_CONNECTIONS} -s {settings.ARIA2_SPLIT} -k 1M"
+        ]
+    
+    def _get_deno_args(self) -> List[str]:
+        """Get Deno JavaScript runtime arguments"""
+        if not settings.ENABLE_DENO:
+            return []
+        
+        if not os.path.exists(settings.DENO_PATH):
+            print(f"Warning: Deno not found at {settings.DENO_PATH}")
+            return []
+        
+        return [
+            "--exec", f"deno:{settings.DENO_PATH}"
+        ]
+    
     async def get_video_info(self, url: str) -> dict:
         """Get video information without downloading"""
         cmd = [
@@ -32,6 +101,11 @@ class DownloadService:
         
         if settings.YTDLP_PROXY:
             cmd.extend(["--proxy", settings.YTDLP_PROXY])
+        
+        # Add Deno support for info extraction
+        deno_args = self._get_deno_args()
+        if deno_args:
+            cmd.extend(deno_args)
         
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -151,11 +225,27 @@ class DownloadService:
                 task.url
             ]
             
+            # Add aria2 external downloader
+            aria2_args = self._get_aria2_args()
+            if aria2_args:
+                cmd.extend(aria2_args)
+            
+            # Add Deno JavaScript runtime support
+            deno_args = self._get_deno_args()
+            if deno_args:
+                cmd.extend(deno_args)
+            
             # Add post-processing for audio formats
             if task.format.lower() in ["mp3", "wav", "flac", "aac"]:
                 cmd.extend(["-x", "--audio-format", task.format.lower()])
                 if task.embed_thumbnail:
                     cmd.append("--embed-thumbnail")
+            
+            # Add GPU encoding for video formats
+            if task.format.lower() in ["mp4", "webm", "best", "video"]:
+                gpu_args = self._get_gpu_encoder_args()
+                if gpu_args:
+                    cmd.extend(["--postprocessor-args", " ".join(gpu_args)])
             
             if settings.YTDLP_PROXY:
                 cmd.extend(["--proxy", settings.YTDLP_PROXY])
@@ -293,6 +383,11 @@ class DownloadService:
             "-o", str(self.download_dir / "temp_sub.%(ext)s"),
             url
         ]
+        
+        # Add Deno support
+        deno_args = self._get_deno_args()
+        if deno_args:
+            cmd.extend(deno_args)
         
         process = await asyncio.create_subprocess_exec(
             *cmd,
