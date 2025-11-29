@@ -77,18 +77,17 @@ class DownloadService:
             f"aria2c:-x {settings.ARIA2_MAX_CONNECTIONS} -s {settings.ARIA2_SPLIT} -k 1M"
         ]
     
-    def _get_deno_args(self) -> List[str]:
-        """Get Deno JavaScript runtime arguments"""
-        if not settings.ENABLE_DENO:
-            return []
+    def _get_deno_env(self) -> Dict[str, str]:
+        """Get environment variables for Deno JavaScript runtime"""
+        env = os.environ.copy()
         
-        if not os.path.exists(settings.DENO_PATH):
-            print(f"Warning: Deno not found at {settings.DENO_PATH}")
-            return []
+        if settings.ENABLE_DENO and os.path.exists(settings.DENO_PATH):
+            # Set DENO_DIR environment variable for yt-dlp-ejs
+            env["DENO_DIR"] = str(Path(settings.DENO_PATH).parent)
+            # Add Deno to PATH
+            env["PATH"] = f"{Path(settings.DENO_PATH).parent}:{env.get('PATH', '')}"
         
-        return [
-            "--exec", f"deno:{settings.DENO_PATH}"
-        ]
+        return env
     
     async def get_video_info(self, url: str) -> dict:
         """Get video information without downloading"""
@@ -102,15 +101,14 @@ class DownloadService:
         if settings.YTDLP_PROXY:
             cmd.extend(["--proxy", settings.YTDLP_PROXY])
         
-        # Add Deno support for info extraction
-        deno_args = self._get_deno_args()
-        if deno_args:
-            cmd.extend(deno_args)
+        # Get environment with Deno support
+        env = self._get_deno_env()
         
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            env=env
         )
         
         stdout, stderr = await process.communicate()
@@ -230,11 +228,6 @@ class DownloadService:
             if aria2_args:
                 cmd.extend(aria2_args)
             
-            # Add Deno JavaScript runtime support
-            deno_args = self._get_deno_args()
-            if deno_args:
-                cmd.extend(deno_args)
-            
             # Add post-processing for audio formats
             if task.format.lower() in ["mp3", "wav", "flac", "aac"]:
                 cmd.extend(["-x", "--audio-format", task.format.lower()])
@@ -253,11 +246,15 @@ class DownloadService:
             if settings.YTDLP_COOKIES_FILE:
                 cmd.extend(["--cookies", settings.YTDLP_COOKIES_FILE])
             
+            # Get environment with Deno support
+            env = self._get_deno_env()
+            
             # Start process
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=env
             )
             
             self.active_processes[task_id] = process
@@ -384,15 +381,14 @@ class DownloadService:
             url
         ]
         
-        # Add Deno support
-        deno_args = self._get_deno_args()
-        if deno_args:
-            cmd.extend(deno_args)
+        # Get environment with Deno support
+        env = self._get_deno_env()
         
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            env=env
         )
         
         await process.wait()
