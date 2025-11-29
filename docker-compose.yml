@@ -33,7 +33,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ytdlp"]
+      test: ["CMD-SHELL", "pg_isready -U ytdlp -d ytdlp_api"]
       interval: 5s
       timeout: 5s
       retries: 5
