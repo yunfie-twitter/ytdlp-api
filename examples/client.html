@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>yt-dlp API Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        input[type="text"],
+        select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 14px 30px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .progress-container {
+            margin-top: 30px;
+            display: none;
+        }
+        
+        .progress-container.active {
+            display: block;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #f0f0f0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        .status {
+            text-align: center;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-weight: 500;
+        }
+        
+        .status.pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .status.downloading {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .status.completed {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .download-link {
+            display: inline-block;
+            margin-top: 10px;
+            padding: 12px 24px;
+            background: #28a745;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+        }
+        
+        .info-box {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 6px;
+        }
+        
+        .info-box h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .info-box p {
+            color: #666;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 yt-dlp Download API</h1>
+        
+        <form id="downloadForm">
+            <div class="form-group">
+                <label for="url">Video URL</label>
+                <input type="text" id="url" name="url" placeholder="https://www.youtube.com/watch?v=..." required>
+            </div>
+            
+            <div class="form-group">
+                <label for="format">Format</label>
+                <select id="format" name="format">
+                    <option value="mp3">MP3 (Audio)</option>
+                    <option value="mp4" selected>MP4 (Video)</option>
+                    <option value="best">Best Quality</option>
+                    <option value="audio">Audio Only (M4A)</option>
+                    <option value="video">Video Only</option>
+                    <option value="webm">WebM</option>
+                    <option value="wav">WAV (Lossless)</option>
+                    <option value="flac">FLAC (Lossless)</option>
+                    <option value="aac">AAC</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="mp3Title">MP3 Title (Optional)</label>
+                <input type="text" id="mp3Title" name="mp3Title" placeholder="Song Title">
+            </div>
+            
+            <div class="form-group">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="embedThumbnail" name="embedThumbnail">
+                    <label for="embedThumbnail" style="margin: 0;">Embed Thumbnail (MP3 only)</label>
+                </div>
+            </div>
+            
+            <button type="submit" id="submitBtn">Start Download</button>
+        </form>
+        
+        <div class="progress-container" id="progressContainer">
+            <div class="status" id="statusBox">Pending...</div>
+            
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill">0%</div>
+            </div>
+            
+            <div class="info-box" id="infoBox" style="display: none;">
+                <h3 id="videoTitle"></h3>
+                <p id="videoInfo"></p>
+            </div>
+            
+            <div style="text-align: center;">
+                <a href="#" class="download-link" id="downloadLink" style="display: none;">Download File</a>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_URL = 'http://localhost:8000';
+        
+        const form = document.getElementById('downloadForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const progressContainer = document.getElementById('progressContainer');
+        const statusBox = document.getElementById('statusBox');
+        const progressFill = document.getElementById('progressFill');
+        const downloadLink = document.getElementById('downloadLink');
+        const infoBox = document.getElementById('infoBox');
+        const videoTitle = document.getElementById('videoTitle');
+        const videoInfo = document.getElementById('videoInfo');
+        
+        let currentTaskId = null;
+        let ws = null;
+        
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const url = document.getElementById('url').value;
+            const format = document.getElementById('format').value;
+            const mp3Title = document.getElementById('mp3Title').value;
+            const embedThumbnail = document.getElementById('embedThumbnail').checked;
+            
+            try {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Creating task...';
+                
+                // Create download task
+                const response = await fetch(`${API_URL}/api/download`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        url,
+                        format,
+                        mp3_title: mp3Title || null,
+                        embed_thumbnail: embedThumbnail
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to create task');
+                }
+                
+                const data = await response.json();
+                currentTaskId = data.task_id;
+                
+                // Show progress container
+                progressContainer.classList.add('active');
+                updateStatus('pending', `Task created! Queue position: ${data.queue_position || 'N/A'}`);
+                
+                // Connect WebSocket for real-time updates
+                connectWebSocket(currentTaskId);
+                
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Start Download';
+            }
+        });
+        
+        function connectWebSocket(taskId) {
+            ws = new WebSocket(`ws://localhost:8000/ws/${taskId}`);
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.error) {
+                    updateStatus('failed', data.error);
+                    return;
+                }
+                
+                // Update progress
+                const progress = data.progress || 0;
+                progressFill.style.width = `${progress}%`;
+                progressFill.textContent = `${progress.toFixed(1)}%`;
+                
+                // Update status
+                updateStatus(data.status, getStatusMessage(data));
+                
+                // Show video info if available
+                if (data.title) {
+                    videoTitle.textContent = data.title;
+                    infoBox.style.display = 'block';
+                }
+                
+                // If completed, show download link
+                if (data.status === 'completed') {
+                    downloadLink.href = `${API_URL}/api/download/${taskId}`;
+                    downloadLink.style.display = 'inline-block';
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Start Download';
+                    ws.close();
+                } else if (data.status === 'failed') {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Start Download';
+                    ws.close();
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateStatus('failed', 'Connection error');
+            };
+        }
+        
+        function updateStatus(status, message) {
+            statusBox.className = `status ${status}`;
+            statusBox.textContent = message;
+        }
+        
+        function getStatusMessage(data) {
+            switch (data.status) {
+                case 'pending':
+                    return 'Waiting in queue...';
+                case 'downloading':
+                    return `Downloading... ${data.progress?.toFixed(1)}%`;
+                case 'completed':
+                    return '✅ Download completed!';
+                case 'failed':
+                    return '❌ Download failed';
+                case 'cancelled':
+                    return '⚠️ Download cancelled';
+                default:
+                    return 'Processing...';
+            }
+        }
+    </script>
+</body>
+</html>
