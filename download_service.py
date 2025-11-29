@@ -118,21 +118,45 @@ class DownloadService:
         
         info = json.loads(stdout.decode())
         
-        # Extract formats
+        # Extract formats with detailed information
         formats = []
+        available_qualities = set()
+        available_audio_formats = set()
+        
         if "formats" in info:
             seen = set()
             for f in info["formats"]:
-                if f.get("format_id") and f.get("format_note"):
-                    key = f"{f.get('height', 'audio')}_{f.get('ext', '')}"
-                    if key not in seen:
-                        formats.append({
-                            "format_id": f["format_id"],
-                            "resolution": f.get("format_note", "audio"),
-                            "ext": f.get("ext", "unknown"),
-                            "filesize": f.get("filesize", 0)
-                        })
-                        seen.add(key)
+                format_id = f.get("format_id")
+                if not format_id:
+                    continue
+                
+                # 画質情報を収集
+                height = f.get("height")
+                if height:
+                    available_qualities.add(f"{height}p")
+                
+                # 音声フォーマットを収集
+                acodec = f.get("acodec")
+                if acodec and acodec != "none":
+                    available_audio_formats.add(f.get("ext", "unknown"))
+                
+                # Format詳細を追加
+                key = f"{format_id}_{f.get('ext', '')}"
+                if key not in seen:
+                    formats.append({
+                        "format_id": format_id,
+                        "resolution": f.get("format_note", f"{height}p" if height else "audio"),
+                        "ext": f.get("ext", "unknown"),
+                        "filesize": f.get("filesize"),
+                        "fps": f.get("fps"),
+                        "vcodec": f.get("vcodec"),
+                        "acodec": acodec
+                    })
+                    seen.add(key)
+        
+        # 画質一覧をソート
+        quality_order = ["2160p", "1440p", "1080p", "720p", "480p", "360p", "240p", "144p"]
+        sorted_qualities = [q for q in quality_order if q in available_qualities]
         
         return {
             "title": info.get("title", "Unknown"),
@@ -142,10 +166,14 @@ class DownloadService:
             "like_count": info.get("like_count", 0),
             "uploader": info.get("uploader", "Unknown"),
             "upload_date": info.get("upload_date"),
-            "formats": formats[:10]  # Limit to 10 formats
+            "formats": formats[:30],  # Limit to 30 formats
+            "available_qualities": sorted_qualities,
+            "available_audio_formats": sorted(list(available_audio_formats))
         }
     
     async def create_task(self, url: str, format_type: str, ip_address: str,
+                         format_id: Optional[str] = None,
+                         quality: Optional[str] = None,
                          mp3_title: Optional[str] = None,
                          embed_thumbnail: bool = False) -> str:
         """Create a new download task"""
@@ -163,6 +191,8 @@ class DownloadService:
             id=task_id,
             url=url,
             format=format_type,
+            format_id=format_id,
+            quality=quality,
             status="pending",
             ip_address=ip_address,
             title=info.get("title"),
@@ -180,15 +210,35 @@ class DownloadService:
         
         return task_id
     
-    def _get_format_options(self, format_type: str) -> tuple:
+    def _get_format_options(self, format_type: str, format_id: Optional[str] = None, 
+                           quality: Optional[str] = None) -> tuple:
         """Get yt-dlp format string and output extension"""
+        # 特定のformat_idが指定されている場合はそれを優先
+        if format_id:
+            # 拡張子を推定
+            ext = "mp4" if "+" in format_id else format_type.lower()
+            return (format_id, ext)
+        
+        # quality指定がある場合
+        if quality:
+            if quality == "best":
+                return ("bestvideo+bestaudio/best", "mp4")
+            elif quality == "worst":
+                return ("worstvideo+worstaudio/worst", "mp4")
+            elif quality.endswith("p"):
+                # 解像度指定 (例: "1080p")
+                height = quality[:-1]
+                format_str = f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+                return (format_str, "mp4")
+        
+        # デフォルトのフォーマットマッピング
         format_map = {
             "mp3": ("bestaudio", "mp3"),
-            "mp4": ("best[ext=mp4]", "mp4"),
-            "best": ("best", "mp4"),
+            "mp4": ("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best", "mp4"),
+            "best": ("bestvideo+bestaudio/best", "mp4"),
             "audio": ("bestaudio", "m4a"),
             "video": ("bestvideo", "mp4"),
-            "webm": ("best[ext=webm]", "webm"),
+            "webm": ("bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]", "webm"),
             "wav": ("bestaudio", "wav"),
             "flac": ("bestaudio", "flac"),
             "aac": ("bestaudio", "aac")
@@ -210,7 +260,11 @@ class DownloadService:
             db.commit()
             
             # Prepare output path
-            format_string, ext = self._get_format_options(task.format)
+            format_string, ext = self._get_format_options(
+                task.format, 
+                task.format_id, 
+                task.quality
+            )
             output_template = str(self.download_dir / f"{task_id}.%(ext)s")
             
             # Build command
