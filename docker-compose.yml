@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: ytdlp-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://ytdlp:ytdlp_password@postgres:5432/ytdlp_api
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      - ./downloads:/app/downloads
+      - ./.env:/app/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ytdlp-network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: ytdlp-postgres
+    environment:
+      POSTGRES_USER: ytdlp
+      POSTGRES_PASSWORD: ytdlp_password
+      POSTGRES_DB: ytdlp_api
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ytdlp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ytdlp-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: ytdlp-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ytdlp-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  ytdlp-network:
+    driver: bridge
