@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
-from typing import Optional, List
+from typing import Optional, List, Union
 import asyncio
 from datetime import datetime
 
@@ -62,7 +62,7 @@ class FormatOption(BaseModel):
     resolution: str
     ext: str
     filesize: Optional[int] = None
-    fps: Optional[int] = None
+    fps: Optional[Union[int, float]] = None  # intまたはfloatを受け入れる
     vcodec: Optional[str] = None
     acodec: Optional[str] = None
 
