@@ -14,6 +14,8 @@ class DownloadTask(Base):
     id = Column(String, primary_key=True, index=True)
     url = Column(String, nullable=False)
     format = Column(String, nullable=False)
+    format_id = Column(String, nullable=True)  # yt-dlpの特定フォーマットID
+    quality = Column(String, nullable=True)  # 画質指定 (1080p, 720p, best, worst等)
     status = Column(String, default="pending")  # pending, downloading, completed, failed, cancelled
     progress = Column(Float, default=0.0)
     file_path = Column(String, nullable=True)
