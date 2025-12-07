@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     # Queue statistics
     ENABLE_FEATURE_QUEUE_STATS: bool = True
     
+    # Progress tracking
+    ENABLE_FEATURE_PROGRESS_TRACKING: bool = True
+    
     # WebSocket support
     ENABLE_FEATURE_WEBSOCKET: bool = True
     

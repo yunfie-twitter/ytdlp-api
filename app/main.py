@@ -14,6 +14,7 @@ from services.queue_worker import queue_worker
 from app.error_responses import register_exception_handlers
 from app.endpoints import router as api_router
 from app.auth_endpoints import router as auth_router
+from app.progress_endpoints import router as progress_router
 
 # Configure logging
 logging.basicConfig(
@@ -27,8 +28,8 @@ def create_app() -> FastAPI:
     
     app = FastAPI(
         title="yt-dlp Download API",
-        description="Full-featured video/audio download API with JWT authentication and feature flags",
-        version="1.0.5",
+        description="Full-featured video/audio download API with JWT authentication, feature flags, and progress tracking",
+        version="1.0.6",
         docs_url="/api/docs",
         openapi_url="/api/openapi.json"
     )
@@ -60,6 +61,7 @@ def create_app() -> FastAPI:
     
     # Register routes
     app.include_router(api_router)
+    app.include_router(progress_router)
     
     # Register auth routes
     if jwt_auth.is_enabled():
@@ -73,7 +75,7 @@ def create_app() -> FastAPI:
     async def root():
         return {
             "service": "yt-dlp Download API",
-            "version": "1.0.5",
+            "version": "1.0.6",
             "status": "running",
             "jwt_auth_enabled": jwt_auth.is_enabled(),
             "timestamp": datetime.utcnow().isoformat()
@@ -112,6 +114,7 @@ def create_app() -> FastAPI:
             "subtitles": is_feature_enabled("subtitles"),
             "thumbnail": is_feature_enabled("thumbnail"),
             "queue_stats": is_feature_enabled("queue_stats"),
+            "progress_tracking": is_feature_enabled("progress_tracking"),
             "websocket": is_feature_enabled("websocket"),
             "mp3_metadata": is_feature_enabled("mp3_metadata"),
             "thumbnail_embed": is_feature_enabled("thumbnail_embed"),
@@ -153,7 +156,7 @@ def create_app() -> FastAPI:
             ]
             logger.info(f"✓ Enabled features: {', '.join(enabled_features)}")
             
-            logger.info("✅ yt-dlp API started successfully (v1.0.5)")
+            logger.info("✅ yt-dlp API started successfully (v1.0.6)")
         except Exception as e:
             logger.error(f"❌ Failed to start API: {e}", exc_info=True)
             raise
