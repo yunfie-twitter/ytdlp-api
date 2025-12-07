@@ -1,233 +1,181 @@
-# ytdlp-api Improvements (v1.0.1)
+# ytdlp-api Improvements (v1.0.2)
 
 このドキュメントでは、2025-12-07に実施されたコード改善内容を記載しています。
 
-## 主な改善点
+## v1.0.2 - プロジェクト構造の統液み
 
-### 1. **セキュリティ向上** 🔒
+### 主な改善
 
-#### CORS設定の強化
-- ワイルドカード (`*`) を使用している場合、警告ログを出力
-- 本番環境では具体的なオリジンを指定するよう推奨
-- HTTPメソッドとヘッダーをホワイトリスト化
+#### 1. **プロジェクト構造の統液み** 🚫
 
-#### パストラバーサル対策
-- ファイルダウンロード時にパスが`DOWNLOAD_DIR`内にあることを検証
-- ファイル削除時も同様の検証を実施
-- 解決コミット: `main.py`, `queue_worker.py`
-
-### 2. **エラーハンドリングの改善** ⚠️
-
-#### より詳細なエラーメッセージ
-- 各エンドポイントで具体的なエラー型を区別（`ValueError`, `json.JSONDecodeError`など）
-- エラーメッセージを100-500文字に制限してログに記録
-- HTTPステータスコードを適切に分類
-
-#### ビデオ情報取得失敗時の対応
-- ビデオ情報が取得できない場合でもタスク作成可能（デフォルト値を使用）
-- JSONパースエラーを明示的にキャッチ
-
-### 3. **ロギング機能の充実** 📝
-
-#### 構造化ログの実装
-- Python標準の`logging`モジュールをすべてのモジュールで使用
-- ログレベルの適切な使い分け（DEBUG, INFO, WARNING, ERROR, CRITICAL）
-- トレースバック情報を含める（`exc_info=True`）
-
-#### ログポイントの追加
-- サーバー起動・シャットダウン
-- タスク作成・開始・完了・キャンセル
-- ダウンロード進捗
-- エラーおよび例外
-- レート制限の超過
-- WebSocket接続・切断
-
-### 4. **タイムアウト設定の追加** ⏱️
-
-#### 処理別のタイムアウト
-- **ビデオ情報取得**: 30秒
-- **サブタイトル取得**: 60秒
-- **ダウンロード処理**: 1時間（`PROCESS_TIMEOUT`）
-- **プロセス終了待機**: 5秒
-
-タイムアウト超過時は明示的にプロセスをkillし、タスクを失敗状態に設定
-
-### 5. **リソースリーク対策** 🔧
-
-#### WebSocket接続のリソース管理
-- `finally`ブロックでDB接続を確実にclose
-- 例外発生時も必ずリソースを解放
-
-#### キューワーカーのGraceful Shutdown
-- `stop()`メソッドでタスクの完了を待機
-- タイムアウト後は強制終了
-
-### 6. **非同期処理の改善** 🔄
-
-#### ダウンロード処理の最適化
-- `asyncio.wait_for()`を使用したタイムアウト管理
-- プロセス通信時のタイムアウト設定
-- エラー発生時の例外処理を明確化
-
-### 7. **設定値の検証** ✅
-
-#### Pydanticバリデーターの追加
-```python
-@field_validator('GPU_ENCODER_TYPE')
-@field_validator('GPU_ENCODER_PRESET')
-@field_validator('PORT')
-# など
+**変更前:**
+```
+ytdlp-api/
+├── main.py
+├── config.py
+├── database.py
+├── download_service.py
+├── ...
+└── examples/
 ```
 
-#### 設定値のドキュメント化
-- 各設定項目に`Field`でdescriptionを追加
-- 数値の範囲制約を定義（`ge`, `le`）
+**変更後:**
+```
+ytdlp-api/
+├── app/
+│   ├── main.py               # FastAPI アプリケーション
+│   ├── models.py            # Pydantic モデル
+│   └── routes/
+├── core/
+│   ├── config.py            # 設定管理
+│   └── security.py          # セキュリティ
+├── services/
+│   ├── download_service.py  # ダウンロード処理
+│   └── queue_worker.py      # キュー管理
+├── infrastructure/
+│   ├── database.py          # データベース
+│   ├── redis_manager.py     # Redis
+│   └── websocket_manager.py # WebSocket
+├── main.py              # エントリーポイント
+└── examples/
+```
 
-### 8. **Redis接続の堅牢化** 💾
+### 依存関係管理の改善 🔗
 
-#### 接続設定の改善
-- `socket_connect_timeout=5`
-- `socket_keepalive=True`
-- 接続成功時のテストpingを実装
+#### パッケージ別役割
 
-#### 健康チェック機能
-- `/health`エンドポイントでRedis接続を確認
-- 各操作でのエラーハンドリングを強化
+| パッケージ | 役割 | 依存 |
+|-----------|------|--------|
+| `app/` | FastAPI アプリ | core, services, infrastructure |
+| `core/` | 設定、セキュリティ | 他すべてから依存 |
+| `services/` | ビジネスロジック | core, infrastructure |
+| `infrastructure/` | 外部サービス | core |
+| `main.py` | エントリ | app |
 
-### 9. **キューワーカーの安定性向上** 🚀
+#### 例: インポート更新
 
-#### エラー対応の強化
-- 連続エラー数をカウント
-- 最大エラー数（10回）を超えたら自動停止
-- エラーカウントは成功時に減少
+**変更前:**
+```python
+from config import settings
+from database import get_db
+from download_service import download_service
+```
 
-#### クリーンアップの安全性向上
-- パストラバーサル対策を実装
-- ファイル削除失敗時もタスクは削除されるよう改善
+**変更後:**
+```python
+from core.config import settings
+from infrastructure.database import get_db
+from services.download_service import download_service
+```
 
-### 10. **コード品質の向上** 📊
+### テクニカル改善 📊
 
-#### 一貫性の改善
-- 全モジュールでロギングを統一
-- エラー処理パターンを統一
-- 型ヒントを追加
+#### 1. **アプリケーションファクトリパターン**
+- `app/main.py` で `create_app()` 鈦数を実装
+- テストでの複数のアプリインスタンス生成が可能
 
-#### ドキュメント
-- Docstringをすべてのメソッドに追加
-- 設定項目のdescriptionを充実
+#### 2. **依存性注入の簡銖**
+- `core/security.py` で `set_redis_manager()` を実装
+- 循環依存を回避
+
+#### 3. **設定管理の一元化**
+- `core/config.py` が唯一の蝯氷
+- 全モジュールが一貫性がある設定アクセス
+
+#### 4. **モジュール化役割戆暢**
+- `app/models.py`: Pydantic モデルだけ
+- `app/routes/`: 将来的のエンドポイント分皂準備
+- `app/main.py`: アプリァクトリと走査控制
+
+### キos管理の改善 👀
+
+```python
+# 屔の dependencies を使用しても簡銖な設計
+from core.security import check_rate_limit
+from core.security import set_redis_manager
+
+@app.get("/api/info")
+async def get_video_info(
+    url: str,
+    ip: str = Depends(check_rate_limit)  # ※依存性注入
+):
+    ...
+```
+
+### 例外釦理とロギングの改善 ⚠️
+
+例外処理を統一した各モジュール:
+
+| モジュール | 例外釦理 | ログ出力 |
+|-----------|------------|--------|
+| `app/main.py` | ※例外からのメッセージ抽出 | DEBUG/INFO/WARNING |
+| `services/` | 接外先の連携適化 | INFO/ERROR |
+| `infrastructure/` | 外部サービスエラー | ERROR/CRITICAL |
+
+### 例外仈的ユースケース
+
+```python
+# services/download_service.py
+async def download(self, task_id: str):
+    try:
+        # ...
+    except asyncio.TimeoutError:
+        logger.error(f"Download timeout for task {task_id}")
+        # 払出してキャッチを適約に
+        task.status = "failed"
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}", exc_info=True)
+        # トレース情報を追加
+        task.status = "failed"
+    finally:
+        # リソース争割を回避
+        if db:
+            db.close()
+```
+
+### ドキュメントの追加 📚
+
+- `PROJECT_STRUCTURE.md`: 新しい構造を詳細に詳輾
+- 稼ぐを統一的に管理しやすい構造
+- 役割別の例外処理方法を記轘
 
 ---
 
-## ファイルごとの変更
+## v1.0.1 - セキュリティとエラーハンドリングの改善
 
-### `main.py`
-- ✅ CORS設定の強化
-- ✅ ロギング機能の追加
-- ✅ パストラバーサル対策
-- ✅ エラーハンドリングの改善
-- ✅ WebSocketリソース管理の改善
-- ✅ バージョンを1.0.1に更新
-
-### `download_service.py`
-- ✅ タイムアウト設定の追加
-- ✅ ロギング機能の追加
-- ✅ エラーハンドリングの詳細化
-- ✅ リソース管理の改善
-- ✅ トレースバック情報の追加
-
-### `redis_manager.py`
-- ✅ 健康チェック機能（`ping()`）の追加
-- ✅ 接続設定の改善
-- ✅ ロギング機能の追加
-- ✅ すべての操作でのエラーハンドリング
-
-### `config.py`
-- ✅ Pydanticバリデーターの追加
-- ✅ `Field`でのメタデータ追加
-- ✅ 設定値の検証
-- ✅ ドキュメント化
-
-### `queue_worker.py`
-- ✅ ロギング機能の追加
-- ✅ エラーカウント機能
-- ✅ Graceful shutdownの実装
-- ✅ パストラバーサル対策
-- ✅ リソース管理の改善
+手輔に詳からな推奨時精選は上辻の IMPROVEMENTS.md ファイルを参照してください。
 
 ---
 
 ## テスト推奨事項
 
-1. **セキュリティテスト**
-   - パストラバーサル攻撃の試行
-   - CORS設定の確認
-   - レート制限の動作確認
+### 機能テスト
 
-2. **エラーハンドリングテスト**
-   - ビデオ情報取得失敗時の動作
-   - タイムアウト時の動作
-   - Redis接続断時の動作
+```bash
+# アプリ起動確認
+curl http://localhost:8000/health
 
-3. **ロギングテスト**
-   - ログレベルの確認
-   - ログメッセージの内容確認
-   - トレースバック情報の確認
+# トレースログの確認
+logs | grep -E "ERROR|CRITICAL"
+```
 
-4. **負荷テスト**
-   - 複数同時ダウンロード
-   - キューの処理確認
-   - メモリリーク検查
+### インテグレーションテスト
 
----
+```bash
+# プロジェクト整文インポートテスト
+from app.main import create_app
+app = create_app()  # 重複インスタンス生成不可
+```
 
-## 今後の改善案
+### 範嚲テスト
 
-1. **モニタリング機能**
-   - Prometheus/Grafanaメトリクスの追加
-   - パフォーマンス監視
-
-2. **データベース**
-   - 古いタスクの定期クリーンアップの最適化
-   - インデックスの追加
-
-3. **キャッシング**
-   - ビデオ情報のキャッシング（Redis）
-   - サムネイル画像のキャッシング
-
-4. **通知機能**
-   - ダウンロード完了時の通知（Webhook）
-   - エラー通知
-
-5. **API機能の拡張**
-   - 一括ダウンロード
-   - ダウンロード履歴の詳細検索
-   - プレイリスト対応
+```bash
+# 統液み後の依存関係確認
+python -m pytest tests/ -v
+```
 
 ---
 
-## デプロイメント時の注意
-
-1. **環境変数の確認**
-   ```bash
-   - DATABASE_URL
-   - REDIS_URL
-   - SECRET_KEY
-   - CORS_ORIGINS (本番環境では具体的なオリジンを指定)
-   ```
-
-2. **ログの確認**
-   - サーバー起動時に"✅ yt-dlp API started successfully"が表示されることを確認
-   - ヘルスチェック: `curl http://localhost:8000/health`
-
-3. **テスト**
-   ```bash
-   # 簡単なダウンロードテスト
-   curl -X POST http://localhost:8000/api/download \
-     -H "Content-Type: application/json" \
-     -d '{"url": "https://example.com/video.mp4", "format": "mp4"}'
-   ```
-
----
-
-Version: 1.0.1  
-Date: 2025-12-07
+Version: 1.0.2  
+Date: 2025-12-07  
+Status: ✅ プロダクション准備一覧
