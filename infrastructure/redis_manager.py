@@ -20,7 +20,8 @@ class RedisManager:
                 encoding="utf-8",
                 decode_responses=True,
                 socket_connect_timeout=5,
-                socket_keepalive=True
+                socket_keepalive=True,
+                retry_on_timeout=True
             )
             # Test connection
             await self.redis.ping()
@@ -68,7 +69,8 @@ class RedisManager:
             return True
         except Exception as e:
             logger.error(f"Error checking rate limit for {ip}: {e}")
-            return False
+            # Graceful degradation: allow request if redis fails
+            return True
     
     # Queue management
     async def add_to_queue(self, task_id: str):
@@ -90,6 +92,14 @@ class RedisManager:
                 return 0
         except Exception as e:
             logger.error(f"Error getting queue position for {task_id}: {e}")
+            return 0
+    
+    async def get_queue_length(self) -> int:
+        """Get total pending queue length"""
+        try:
+            return await self.redis.llen("queue:pending")
+        except Exception as e:
+            logger.error(f"Error getting queue length: {e}")
             return 0
     
     async def get_active_downloads(self) -> list:

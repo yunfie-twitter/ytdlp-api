@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse
 
 from core.config import settings
 from core.security import check_rate_limit, set_redis_manager
@@ -21,8 +22,11 @@ from infrastructure.websocket_manager import ws_manager
 from services.download_service import download_service
 from services.queue_worker import queue_worker
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging with more detailed format
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 def create_app() -> FastAPI:
@@ -31,11 +35,13 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="yt-dlp Download API",
         description="Full-featured video/audio download API with queue management",
-        version="1.0.2"
+        version="1.0.3",
+        docs_url="/api/docs",
+        openapi_url="/api/openapi.json"
     )
     
     # CORS - More secure configuration
-    allowed_origins = settings.CORS_ORIGINS.split(",")
+    allowed_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
     if "*" not in allowed_origins:
         # Specific origins for production
         app.add_middleware(
@@ -44,6 +50,7 @@ def create_app() -> FastAPI:
             allow_credentials=True,
             allow_methods=["GET", "POST", "DELETE"],
             allow_headers=["Content-Type"],
+            max_age=3600,
         )
     else:
         # Allow all for development (log warning)
@@ -54,6 +61,7 @@ def create_app() -> FastAPI:
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
+            max_age=3600,
         )
     
     # Startup/Shutdown
@@ -61,10 +69,14 @@ def create_app() -> FastAPI:
     async def startup_event():
         """Initialize services"""
         try:
+            logger.info("Starting up yt-dlp API...")
             init_db()
+            logger.info("✓ Database initialized")
             await redis_manager.connect()
+            logger.info("✓ Redis connected")
             set_redis_manager(redis_manager)
             asyncio.create_task(queue_worker.start())
+            logger.info("✓ Queue worker started")
             logger.info("✅ yt-dlp API started successfully")
         except Exception as e:
             logger.error(f"❌ Failed to start API: {e}", exc_info=True)
@@ -74,9 +86,12 @@ def create_app() -> FastAPI:
     async def shutdown_event():
         """Cleanup on shutdown"""
         try:
+            logger.info("Shutting down yt-dlp API...")
             await queue_worker.stop()
+            logger.info("✓ Queue worker stopped")
             await redis_manager.disconnect()
-            logger.info("👋 yt-dlp API shutdown")
+            logger.info("✓ Redis disconnected")
+            logger.info("👋 yt-dlp API shutdown complete")
         except Exception as e:
             logger.error(f"Error during shutdown: {e}", exc_info=True)
     
@@ -85,18 +100,22 @@ def create_app() -> FastAPI:
     async def root():
         return {
             "service": "yt-dlp Download API",
-            "version": "1.0.2",
+            "version": "1.0.3",
             "status": "running"
         }
     
     @app.get("/health")
     async def health_check():
         try:
-            await redis_manager.ping()
-            return {"status": "healthy", "redis": "connected"}
+            redis_ok = await redis_manager.ping()
+            return {
+                "status": "healthy" if redis_ok else "degraded",
+                "redis": "connected" if redis_ok else "disconnected",
+                "timestamp": datetime.utcnow().isoformat()
+            }
         except Exception as e:
             logger.warning(f"Health check warning: {e}")
-            return {"status": "degraded", "message": str(e)}, 503
+            return {"status": "degraded", "message": str(e), "timestamp": datetime.utcnow().isoformat()}, 503
     
     # Video info endpoint
     @app.get("/api/info", response_model=VideoInfoResponse)
@@ -105,15 +124,22 @@ def create_app() -> FastAPI:
         ip: str = Depends(check_rate_limit)
     ):
         """Get video information without downloading"""
+        if not url or not _is_valid_url(url):
+            logger.warning(f"Invalid URL format from {ip}: {url[:50] if url else 'None'}")
+            raise HTTPException(status_code=400, detail="Invalid URL format")
+        
         try:
-            logger.info(f"Getting video info for: {url[:50]}...")
+            logger.info(f"Getting video info for: {url[:60]}... from {ip}")
             info = await download_service.get_video_info(url)
             return VideoInfoResponse(**info)
         except ValueError as e:
             logger.warning(f"Invalid video info request: {e}")
             raise HTTPException(status_code=400, detail=str(e))
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout getting video info for: {url[:60]}...")
+            raise HTTPException(status_code=408, detail="Request timeout")
         except Exception as e:
-            logger.error(f"Failed to get video info: {e}", exc_info=True)
+            logger.error(f"Failed to get video info for {url[:60]}...: {e}", exc_info=True)
             raise HTTPException(status_code=400, detail="Failed to retrieve video information")
     
     # Download endpoint
@@ -125,8 +151,18 @@ def create_app() -> FastAPI:
         db = Depends(get_db)
     ):
         """Create a new download task"""
+        if not _is_valid_url(str(request.url)):
+            logger.warning(f"Invalid URL format from {ip}: {str(request.url)[:50]}")
+            raise HTTPException(status_code=400, detail="Invalid URL format")
+        
+        # Validate format
+        valid_formats = ["mp3", "mp4", "best", "audio", "video", "webm", "wav", "flac", "aac"]
+        if request.format.lower() not in valid_formats:
+            logger.warning(f"Invalid format requested from {ip}: {request.format}")
+            raise HTTPException(status_code=400, detail=f"Invalid format. Must be one of: {valid_formats}")
+        
         try:
-            logger.info(f"Creating download task for: {str(request.url)[:50]}... from {ip}")
+            logger.info(f"Creating download task for: {str(request.url)[:60]}... format: {request.format} from {ip}")
             task_id = await download_service.create_task(
                 url=str(request.url),
                 format_type=request.format,
@@ -160,6 +196,10 @@ def create_app() -> FastAPI:
         db = Depends(get_db)
     ):
         """Get task status via polling"""
+        if not _is_valid_uuid(task_id):
+            logger.warning(f"Invalid task ID format: {task_id}")
+            raise HTTPException(status_code=400, detail="Invalid task ID format")
+        
         task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
         
         if not task:
@@ -183,6 +223,11 @@ def create_app() -> FastAPI:
     @app.websocket("/ws/{task_id}")
     async def websocket_endpoint(websocket: WebSocket, task_id: str):
         """WebSocket for real-time progress updates"""
+        if not _is_valid_uuid(task_id):
+            logger.warning(f"WebSocket: Invalid task ID format: {task_id}")
+            await websocket.close(code=1008, reason="Invalid task ID format")
+            return
+        
         await ws_manager.connect(websocket, task_id)
         
         db = None
@@ -238,6 +283,10 @@ def create_app() -> FastAPI:
         db = Depends(get_db)
     ):
         """Download the completed file"""
+        if not _is_valid_uuid(task_id):
+            logger.warning(f"Invalid task ID format: {task_id}")
+            raise HTTPException(status_code=400, detail="Invalid task ID format")
+        
         task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
         
         if not task:
@@ -269,7 +318,7 @@ def create_app() -> FastAPI:
         else:
             download_filename = task.filename or f"{task_id}.mp4"
         
-        logger.info(f"Downloading file for task: {task_id}")
+        logger.info(f"Downloading file for task: {task_id} as {download_filename}")
         
         return FileResponse(
             path=task.file_path,
@@ -284,6 +333,10 @@ def create_app() -> FastAPI:
         db = Depends(get_db)
     ):
         """Cancel a running download task"""
+        if not _is_valid_uuid(task_id):
+            logger.warning(f"Invalid task ID format: {task_id}")
+            raise HTTPException(status_code=400, detail="Invalid task ID format")
+        
         task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
         
         if not task:
@@ -294,14 +347,15 @@ def create_app() -> FastAPI:
             logger.warning(f"Cancel: Task cannot be cancelled: {task_id} (status: {task.status})")
             raise HTTPException(status_code=400, detail="Task cannot be cancelled")
         
-        cancelled = await download_service.cancel_task(task_id)
-        
-        task.status = "cancelled"
-        db.commit()
-        
-        logger.info(f"Task cancelled: {task_id}")
-        
-        return {"message": "Task cancelled", "cancelled": cancelled}
+        try:
+            cancelled = await download_service.cancel_task(task_id)
+            task.status = "cancelled"
+            db.commit()
+            logger.info(f"Task cancelled: {task_id}")
+            return {"message": "Task cancelled", "cancelled": cancelled}
+        except Exception as e:
+            logger.error(f"Error cancelling task {task_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to cancel task")
     
     # Delete task
     @app.delete("/api/task/{task_id}")
@@ -310,6 +364,10 @@ def create_app() -> FastAPI:
         db = Depends(get_db)
     ):
         """Delete a task and its file"""
+        if not _is_valid_uuid(task_id):
+            logger.warning(f"Invalid task ID format: {task_id}")
+            raise HTTPException(status_code=400, detail="Invalid task ID format")
+        
         task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
         
         if not task:
@@ -325,14 +383,16 @@ def create_app() -> FastAPI:
                     os.remove(file_path)
                     logger.info(f"Deleted file for task: {task_id}")
             except Exception as e:
-                logger.error(f"Failed to delete file for task {task_id}: {e}")
+                logger.error(f"Failed to delete file for task {task_id}: {e}", exc_info=True)
         
-        db.delete(task)
-        db.commit()
-        
-        logger.info(f"Task deleted: {task_id}")
-        
-        return {"message": "Task deleted"}
+        try:
+            db.delete(task)
+            db.commit()
+            logger.info(f"Task deleted: {task_id}")
+            return {"message": "Task deleted"}
+        except Exception as e:
+            logger.error(f"Error deleting task {task_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to delete task")
     
     # List tasks
     @app.get("/api/tasks")
@@ -344,29 +404,35 @@ def create_app() -> FastAPI:
         """List all tasks (optionally filtered by status)"""
         if limit > 200:
             limit = 200
+        elif limit < 1:
+            limit = 1
         
         query = db.query(DownloadTask)
         
         if status:
             valid_statuses = ["pending", "downloading", "completed", "failed", "cancelled"]
             if status not in valid_statuses:
+                logger.warning(f"Invalid status filter: {status}")
                 raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
             query = query.filter(DownloadTask.status == status)
         
-        tasks = query.order_by(DownloadTask.created_at.desc()).limit(limit).all()
-        
-        return [
-            {
-                "task_id": task.id,
-                "url": task.url,
-                "status": task.status,
-                "progress": task.progress,
-                "title": task.title,
-                "format": task.format,
-                "created_at": task.created_at.isoformat()
-            }
-            for task in tasks
-        ]
+        try:
+            tasks = query.order_by(DownloadTask.created_at.desc()).limit(limit).all()
+            return [
+                {
+                    "task_id": task.id,
+                    "url": task.url,
+                    "status": task.status,
+                    "progress": task.progress,
+                    "title": task.title,
+                    "format": task.format,
+                    "created_at": task.created_at.isoformat()
+                }
+                for task in tasks
+            ]
+        except Exception as e:
+            logger.error(f"Error listing tasks: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to retrieve tasks")
     
     # Get thumbnail
     @app.get("/api/thumbnail/{task_id}")
@@ -375,6 +441,10 @@ def create_app() -> FastAPI:
         db = Depends(get_db)
     ):
         """Get thumbnail URL for a task"""
+        if not _is_valid_uuid(task_id):
+            logger.warning(f"Invalid task ID format: {task_id}")
+            raise HTTPException(status_code=400, detail="Invalid task ID format")
+        
         task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
         
         if not task:
@@ -395,12 +465,20 @@ def create_app() -> FastAPI:
         ip: str = Depends(check_rate_limit)
     ):
         """Download subtitles for a video"""
+        if not url or not _is_valid_url(url):
+            logger.warning(f"Invalid URL format from {ip}: {url[:50] if url else 'None'}")
+            raise HTTPException(status_code=400, detail="Invalid URL format")
+        
+        if not _is_valid_language_code(lang):
+            logger.warning(f"Invalid language code from {ip}: {lang}")
+            raise HTTPException(status_code=400, detail="Invalid language code format")
+        
         try:
-            logger.info(f"Getting subtitles for: {url[:50]}... (lang: {lang})")
+            logger.info(f"Getting subtitles for: {url[:60]}... (lang: {lang}) from {ip}")
             subtitles = await download_service.get_subtitles(url, lang)
             
             if not subtitles:
-                logger.warning(f"Subtitles not found: {url[:50]}... (lang: {lang})")
+                logger.warning(f"Subtitles not found: {url[:60]}... (lang: {lang})")
                 raise HTTPException(status_code=404, detail="Subtitles not found")
             
             return {
@@ -411,6 +489,9 @@ def create_app() -> FastAPI:
         except ValueError as e:
             logger.warning(f"Invalid subtitles request: {e}")
             raise HTTPException(status_code=400, detail=str(e))
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout getting subtitles for: {url[:60]}...")
+            raise HTTPException(status_code=408, detail="Request timeout")
         except Exception as e:
             logger.error(f"Failed to get subtitles: {e}", exc_info=True)
             raise HTTPException(status_code=400, detail="Failed to retrieve subtitles")
@@ -421,9 +502,11 @@ def create_app() -> FastAPI:
         """Get queue statistics"""
         try:
             active = await redis_manager.get_active_downloads()
+            pending_count = await redis_manager.get_queue_length()
             
             return {
                 "active_downloads": len(active),
+                "pending_tasks": pending_count,
                 "max_concurrent": settings.MAX_CONCURRENT_DOWNLOADS,
                 "available_slots": settings.MAX_CONCURRENT_DOWNLOADS - len(active)
             }
@@ -432,5 +515,27 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail="Failed to retrieve queue statistics")
     
     return app
+
+def _is_valid_url(url: str) -> bool:
+    """Validate URL format"""
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc]) and result.scheme in ['http', 'https']
+    except Exception:
+        return False
+
+def _is_valid_uuid(uuid_str: str) -> bool:
+    """Validate UUID format"""
+    try:
+        import uuid
+        uuid.UUID(uuid_str)
+        return True
+    except (ValueError, AttributeError):
+        return False
+
+def _is_valid_language_code(lang: str) -> bool:
+    """Validate language code format (e.g., en, ja, en-US)"""
+    import re
+    return bool(re.match(r'^[a-z]{2}(-[A-Z]{2})?$', lang))
 
 app = create_app()
