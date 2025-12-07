@@ -19,11 +19,20 @@ class Settings(BaseSettings):
     
     # ==================== Redis ====================
     REDIS_URL: str = "redis://localhost:6379"
+    REDIS_POOL_SIZE: int = 20
+    REDIS_TIMEOUT: int = 5
     
     # ==================== Download Settings ====================
     DOWNLOAD_DIR: str = "./downloads"
     MAX_CONCURRENT_DOWNLOADS: int = 3
     AUTO_DELETE_AFTER: int = 604800  # 7 days
+    DOWNLOAD_TIMEOUT: int = 3600  # 1 hour
+    
+    # ==================== Job Management ====================
+    JOB_QUEUE_MAX_SIZE: int = 1000
+    JOB_RETRY_ATTEMPTS: int = 3
+    JOB_RETRY_BACKOFF: float = 1.5
+    JOB_CLEANUP_INTERVAL: int = 3600  # 1 hour
     
     # ==================== GPU Encoding ====================
     ENABLE_GPU_ENCODING: bool = False
@@ -42,91 +51,62 @@ class Settings(BaseSettings):
     # ==================== yt-dlp Settings ====================
     YTDLP_PROXY: Optional[str] = None
     YTDLP_COOKIES_FILE: Optional[str] = None
+    YTDLP_SOCKET_TIMEOUT: int = 30
+    YTDLP_RETRIES: int = 3
     
     # ==================== Rate Limiting ====================
     RATE_LIMIT_PER_MINUTE: int = 60
+    RATE_LIMIT_BURST: int = 10
+    
+    # ==================== Timeouts ====================
+    VIDEO_INFO_TIMEOUT: int = 30
+    SUBTITLE_TIMEOUT: int = 60
+    THUMBNAIL_TIMEOUT: int = 30
+    API_REQUEST_TIMEOUT: int = 30
     
     # ==================== Security ====================
     SECRET_KEY: str = "your-secret-key-change-in-production"
     
     # ==================== JWT Authentication ====================
-    # Enable/Disable JWT authentication system
     ENABLE_JWT_AUTH: bool = False
-    
-    # Password required to issue new API keys
-    # If not set, API key issuance is disabled
     API_KEY_ISSUE_PASSWORD: Optional[str] = None
-    
-    # JWT configuration
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_DAYS: int = 30
-    
-    # Redis key prefix for API keys
     REDIS_API_KEY_PREFIX: str = "api_key:"
-    
-    # Whether to validate API key on every request
     JWT_VALIDATE_ON_EVERY_REQUEST: bool = True
     
+    # ==================== Caching ====================
+    ENABLE_CACHING: bool = True
+    CACHE_MAX_SIZE: int = 1000
+    VIDEO_INFO_CACHE_TTL: int = 3600  # 1 hour
+    
+    # ==================== Monitoring ====================
+    ENABLE_METRICS: bool = True
+    METRICS_COLLECTION_INTERVAL: int = 60
+    HEALTH_CHECK_INTERVAL: int = 30
+    
     # ==================== Feature Flags ====================
-    # Video Info endpoint
     ENABLE_FEATURE_VIDEO_INFO: bool = True
-    
-    # Download endpoint
     ENABLE_FEATURE_DOWNLOAD: bool = True
-    
-    # Status polling endpoint
     ENABLE_FEATURE_STATUS: bool = True
-    
-    # File download endpoint
     ENABLE_FEATURE_FILE_DOWNLOAD: bool = True
-    
-    # Task cancellation
     ENABLE_FEATURE_CANCEL: bool = True
-    
-    # Task deletion
     ENABLE_FEATURE_DELETE: bool = True
-    
-    # Task listing
     ENABLE_FEATURE_LIST_TASKS: bool = True
-    
-    # Subtitle download
     ENABLE_FEATURE_SUBTITLES: bool = True
-    
-    # Thumbnail retrieval
     ENABLE_FEATURE_THUMBNAIL: bool = True
-    
-    # Queue statistics
     ENABLE_FEATURE_QUEUE_STATS: bool = True
-    
-    # Progress tracking
     ENABLE_FEATURE_PROGRESS_TRACKING: bool = True
-    
-    # WebSocket support
     ENABLE_FEATURE_WEBSOCKET: bool = True
-    
-    # MP3 metadata embedding
     ENABLE_FEATURE_MP3_METADATA: bool = True
-    
-    # Thumbnail embedding in audio files
     ENABLE_FEATURE_THUMBNAIL_EMBED: bool = True
-    
-    # GPU encoding support
     ENABLE_FEATURE_GPU_ENCODING: bool = True
-    
-    # Aria2 downloader support
     ENABLE_FEATURE_ARIA2: bool = True
-    
-    # Custom format selection
     ENABLE_FEATURE_CUSTOM_FORMAT: bool = True
-    
-    # Quality selection
     ENABLE_FEATURE_QUALITY_SELECTION: bool = True
-    
-    # Proxy support
     ENABLE_FEATURE_PROXY: bool = True
-    
-    # Cookie support
     ENABLE_FEATURE_COOKIES: bool = True
+    ENABLE_FEATURE_METRICS: bool = True
     
     class Config:
         env_file = ".env"
