@@ -9,6 +9,8 @@ from core.config import settings
 from core.security import set_redis_manager, is_feature_enabled
 from core.jwt_auth import jwt_auth
 from core.error_handler import ErrorContext
+from core.logging_middleware import LoggingMiddleware
+from core.logging_config import setup_logging
 from infrastructure.database import init_db
 from infrastructure.redis_manager import redis_manager
 from services.queue_worker import queue_worker
@@ -17,12 +19,10 @@ from app.endpoints import router as api_router
 from app.auth_endpoints import router as auth_router
 from app.progress_endpoints import router as progress_router
 from app.metrics_endpoints import router as metrics_router
+from app.performance_endpoints import router as performance_router
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Setup logging first
+setup_logging(json_format=True)
 logger = logging.getLogger(__name__)
 
 def create_app() -> FastAPI:
@@ -30,11 +30,14 @@ def create_app() -> FastAPI:
     
     app = FastAPI(
         title="yt-dlp Download API",
-        description="Full-featured video/audio download API with JWT auth, progress tracking, job management, and comprehensive monitoring",
-        version="1.0.7",
+        description="Enterprise-grade video/audio download API with performance optimization and comprehensive monitoring",
+        version="1.0.8",
         docs_url="/api/docs",
         openapi_url="/api/openapi.json"
     )
+    
+    # Add logging middleware
+    app.add_middleware(LoggingMiddleware)
     
     # CORS configuration
     allowed_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
@@ -77,12 +80,16 @@ def create_app() -> FastAPI:
         app.include_router(metrics_router)
         logger.info("✓ Metrics endpoints enabled")
     
+    # Register performance routes
+    app.include_router(performance_router)
+    logger.info("✓ Performance monitoring endpoints enabled")
+    
     # Health check endpoint
     @app.get("/")
     async def root():
         return {
             "service": "yt-dlp Download API",
-            "version": "1.0.7",
+            "version": "1.0.8",
             "status": "running",
             "jwt_auth_enabled": jwt_auth.is_enabled(),
             "timestamp": datetime.utcnow().isoformat()
@@ -139,7 +146,7 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup_event():
         try:
-            logger.info("🚀 Starting up yt-dlp API v1.0.7...")
+            logger.info("🚀 Starting up yt-dlp API v1.0.8...")
             
             with ErrorContext("startup"):
                 init_db()
@@ -170,7 +177,7 @@ def create_app() -> FastAPI:
                 ]
                 logger.info(f"✓ Enabled features: {', '.join(enabled_features[:10])}...")
                 
-                logger.info("✅ yt-dlp API started successfully (v1.0.7)")
+                logger.info("✅ yt-dlp API started successfully (v1.0.8 - Performance Optimized)")
         except Exception as e:
             logger.error(f"❌ Failed to start API: {e}", exc_info=True)
             raise
