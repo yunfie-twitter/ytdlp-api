@@ -1,1 +1,1 @@
-"""yt-dlp API Application Package"""
+"""FastAPI application package"""

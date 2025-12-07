@@ -1,1 +1,1 @@
-"""External service integrations"""
+"""Infrastructure package - external services integration"""

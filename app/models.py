@@ -1,29 +1,26 @@
-"""Pydantic models for API requests/responses"""
+"""Pydantic models for request/response validation"""
 from pydantic import BaseModel, HttpUrl
-from typing import Optional, List, Union
+from typing import Optional, List
 from datetime import datetime
 
-
 class DownloadRequest(BaseModel):
-    """Request model for creating a download task"""
+    """Download request model"""
     url: HttpUrl
     format: str = "mp4"  # mp3, mp4, best, audio, video, webm, wav, flac, aac
-    format_id: Optional[str] = None  # yt-dlpの特定フォーマットID (例: "137+140")
-    quality: Optional[str] = None  # 画質指定 (例: "1080p", "720p", "best", "worst")
-    mp3_title: Optional[str] = None
-    embed_thumbnail: bool = False
-
+    format_id: Optional[str] = None  # Specific yt-dlp format ID
+    quality: Optional[str] = None  # best, worst, or resolution like 1080p
+    mp3_title: Optional[str] = None  # Custom title for MP3 files
+    embed_thumbnail: bool = False  # Embed thumbnail in MP3
 
 class TaskResponse(BaseModel):
-    """Response model for task creation"""
+    """Task creation response"""
     task_id: str
     status: str
-    queue_position: Optional[int] = None
+    queue_position: int
     message: str
 
-
 class TaskStatusResponse(BaseModel):
-    """Response model for task status"""
+    """Task status response"""
     task_id: str
     status: str
     progress: float
@@ -32,23 +29,21 @@ class TaskStatusResponse(BaseModel):
     title: Optional[str] = None
     thumbnail_url: Optional[str] = None
     error_message: Optional[str] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
-
-class FormatOption(BaseModel):
-    """Video format option"""
+class VideoFormat(BaseModel):
+    """Video format information"""
     format_id: str
     resolution: str
     ext: str
     filesize: Optional[int] = None
-    fps: Optional[Union[int, float]] = None  # intまたはfloatを受け入れる
+    fps: Optional[float] = None
     vcodec: Optional[str] = None
     acodec: Optional[str] = None
 
-
 class VideoInfoResponse(BaseModel):
-    """Response model for video information"""
+    """Video information response"""
     title: str
     thumbnail: Optional[str] = None
     duration: int
@@ -56,6 +51,6 @@ class VideoInfoResponse(BaseModel):
     like_count: int
     uploader: str
     upload_date: Optional[str] = None
-    formats: List[FormatOption]
-    available_qualities: List[str]  # 利用可能な画質一覧
-    available_audio_formats: List[str]  # 利用可能な音声フォーマット一覧
+    formats: List[VideoFormat]
+    available_qualities: List[str]
+    available_audio_formats: List[str]
