@@ -1,6 +1,13 @@
 """Core package - configuration, security, exceptions, and validation"""
 from core.config import settings
-from core.security import check_rate_limit, set_redis_manager
+from core.security import (
+    check_rate_limit,
+    set_redis_manager,
+    verify_api_key,
+    get_optional_api_key,
+    is_feature_enabled
+)
+from core.jwt_auth import jwt_auth
 from core.exceptions import (
     APIException,
     ValidationError,
@@ -42,6 +49,10 @@ __all__ = [
     'settings',
     'check_rate_limit',
     'set_redis_manager',
+    'verify_api_key',
+    'get_optional_api_key',
+    'is_feature_enabled',
+    'jwt_auth',
     'APIException',
     'ValidationError',
     'InvalidURLError',
