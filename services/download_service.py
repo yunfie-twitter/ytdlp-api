@@ -27,6 +27,7 @@ class DownloadService:
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.active_processes: Dict[str, asyncio.subprocess.Process] = {}
         self.PROCESS_TIMEOUT = 3600  # 1 hour timeout for downloads
+        logger.info(f"DownloadService initialized with directory: {self.download_dir}")
     
     def _get_gpu_encoder_args(self) -> List[str]:
         """Get GPU encoder arguments based on configuration"""
@@ -40,10 +41,13 @@ class DownloadService:
         if encoder_type == "auto":
             if shutil.which("nvidia-smi"):
                 encoder_type = "nvenc"
+                logger.info("GPU encoding: NVIDIA NVENC detected")
             elif os.path.exists("/dev/dri"):
                 encoder_type = "vaapi"
+                logger.info("GPU encoding: VAAPI detected")
             else:
-                return []  # No GPU encoder available
+                logger.info("GPU encoding: No compatible GPU encoder found")
+                return []
         
         postprocessor_args = []
         
@@ -77,6 +81,7 @@ class DownloadService:
         if not settings.ENABLE_ARIA2:
             return []
         
+        logger.info("Using aria2 as external downloader")
         return [
             "--external-downloader", "aria2c",
             "--external-downloader-args",
@@ -90,6 +95,7 @@ class DownloadService:
         if settings.ENABLE_DENO and os.path.exists(settings.DENO_PATH):
             env["DENO_DIR"] = str(Path(settings.DENO_PATH).parent)
             env["PATH"] = f"{Path(settings.DENO_PATH).parent}:{env.get('PATH', '')}"
+            logger.debug("Deno environment enabled")
         
         return env
     
@@ -121,13 +127,13 @@ class DownloadService:
                     timeout=30
                 )
             except asyncio.TimeoutError:
-                logger.error(f"Timeout getting video info for {url}")
+                logger.error(f"Timeout getting video info for {url[:60]}")
                 process.kill()
-                raise Exception("Video info retrieval timed out")
+                raise Exception("Video info retrieval timed out (30s)")
             
             if process.returncode != 0:
                 error_msg = stderr.decode() if stderr else "Unknown error"
-                logger.error(f"yt-dlp failed for {url}: {error_msg[:200]}")
+                logger.error(f"yt-dlp failed for {url[:60]}: {error_msg[:200]}")
                 raise ValueError(f"Failed to get video info: {error_msg[:100]}")
             
             info = json.loads(stdout.decode())
@@ -167,6 +173,8 @@ class DownloadService:
             quality_order = ["2160p", "1440p", "1080p", "720p", "480p", "360p", "240p", "144p"]
             sorted_qualities = [q for q in quality_order if q in available_qualities]
             
+            logger.info(f"Retrieved info for {info.get('title', 'Unknown')[:50]}")
+            
             return {
                 "title": info.get("title", "Unknown"),
                 "thumbnail": info.get("thumbnail"),
@@ -180,7 +188,7 @@ class DownloadService:
                 "available_audio_formats": sorted(list(available_audio_formats))
             }
         except json.JSONDecodeError:
-            logger.error(f"Failed to parse JSON from yt-dlp for {url}")
+            logger.error(f"Failed to parse JSON from yt-dlp for {url[:60]}")
             raise ValueError("Invalid video information format")
     
     async def create_task(self, url: str, format_type: str, ip_address: str,
@@ -263,6 +271,7 @@ class DownloadService:
             db.close()
             return
         
+        process = None
         try:
             task.status = "downloading"
             db.commit()
@@ -359,7 +368,7 @@ class DownloadService:
                     task.status = "completed"
                     task.progress = 100.0
                     task.completed_at = datetime.utcnow()
-                    logger.info(f"Download completed for task {task_id}")
+                    logger.info(f"Download completed for task {task_id} ({file_path.name})")
                 else:
                     task.status = "failed"
                     task.error_message = "File not found after download"
@@ -386,6 +395,11 @@ class DownloadService:
             db.close()
             if task_id in self.active_processes:
                 del self.active_processes[task_id]
+            if process and not process.returncode:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
             await redis_manager.remove_from_active(task_id)
     
     async def _apply_mp3_tags(self, file_path: Path, task: DownloadTask):
@@ -443,6 +457,7 @@ class DownloadService:
     
     async def get_subtitles(self, url: str, lang: str = "en") -> Optional[str]:
         """Download subtitles"""
+        temp_files = []
         try:
             cmd = [
                 "yt-dlp",
@@ -466,19 +481,26 @@ class DownloadService:
             try:
                 await asyncio.wait_for(process.wait(), timeout=60)
             except asyncio.TimeoutError:
-                logger.error(f"Subtitle download timeout for {url}")
+                logger.error(f"Subtitle download timeout for {url[:60]}")
                 process.kill()
                 raise Exception("Subtitle download timed out")
             
             sub_files = list(self.download_dir.glob("temp_sub.*.srt"))
             if sub_files:
                 content = sub_files[0].read_text(encoding="utf-8")
-                sub_files[0].unlink()
-                logger.info(f"Subtitles retrieved for {url}")
+                temp_files = sub_files
+                logger.info(f"Subtitles retrieved for {url[:60]} (lang: {lang})")
                 return content
             return None
         except Exception as e:
-            logger.error(f"Failed to get subtitles for {url}: {e}")
+            logger.error(f"Failed to get subtitles for {url[:60]}: {e}")
             raise
+        finally:
+            # Clean up temp files
+            for temp_file in temp_files:
+                try:
+                    temp_file.unlink()
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temp file {temp_file}: {e}")
 
 download_service = DownloadService()
