@@ -1,181 +1,257 @@
-# ytdlp-api Improvements (v1.0.2)
+# ytdlp-api Improvements
 
-このドキュメントでは、2025-12-07に実施されたコード改善内容を記載しています。
+## v1.0.3 - Code Quality & Error Handling Enhancement
 
-## v1.0.2 - プロジェクト構造の統液み
+### Major Improvements 🚀
 
-### 主な改善
+#### 1. **Input Validation Enhancement** ✅
 
-#### 1. **プロジェクト構造の統液み** 🚫
+**Added comprehensive input validation:**
+- URL format validation with `_is_valid_url()`
+  - Checks for proper scheme (http/https)
+  - Validates netloc presence
+- UUID format validation with `_is_valid_uuid()`
+  - Prevents invalid task ID access
+- Language code validation with `_is_valid_language_code()`
+  - Supports formats like: en, ja, en-US, etc.
+- Format validation for download requests
+  - Whitelist of allowed formats: mp3, mp4, best, audio, video, webm, wav, flac, aac
+- Limit parameter validation
+  - Ensures limit is between 1 and 200
 
-**変更前:**
-```
-ytdlp-api/
-├── main.py
-├── config.py
-├── database.py
-├── download_service.py
-├── ...
-└── examples/
-```
-
-**変更後:**
-```
-ytdlp-api/
-├── app/
-│   ├── main.py               # FastAPI アプリケーション
-│   ├── models.py            # Pydantic モデル
-│   └── routes/
-├── core/
-│   ├── config.py            # 設定管理
-│   └── security.py          # セキュリティ
-├── services/
-│   ├── download_service.py  # ダウンロード処理
-│   └── queue_worker.py      # キュー管理
-├── infrastructure/
-│   ├── database.py          # データベース
-│   ├── redis_manager.py     # Redis
-│   └── websocket_manager.py # WebSocket
-├── main.py              # エントリーポイント
-└── examples/
-```
-
-### 依存関係管理の改善 🔗
-
-#### パッケージ別役割
-
-| パッケージ | 役割 | 依存 |
-|-----------|------|--------|
-| `app/` | FastAPI アプリ | core, services, infrastructure |
-| `core/` | 設定、セキュリティ | 他すべてから依存 |
-| `services/` | ビジネスロジック | core, infrastructure |
-| `infrastructure/` | 外部サービス | core |
-| `main.py` | エントリ | app |
-
-#### 例: インポート更新
-
-**変更前:**
+**Code Example:**
 ```python
-from config import settings
-from database import get_db
-from download_service import download_service
-```
-
-**変更後:**
-```python
-from core.config import settings
-from infrastructure.database import get_db
-from services.download_service import download_service
-```
-
-### テクニカル改善 📊
-
-#### 1. **アプリケーションファクトリパターン**
-- `app/main.py` で `create_app()` 鈦数を実装
-- テストでの複数のアプリインスタンス生成が可能
-
-#### 2. **依存性注入の簡銖**
-- `core/security.py` で `set_redis_manager()` を実装
-- 循環依存を回避
-
-#### 3. **設定管理の一元化**
-- `core/config.py` が唯一の蝯氷
-- 全モジュールが一貫性がある設定アクセス
-
-#### 4. **モジュール化役割戆暢**
-- `app/models.py`: Pydantic モデルだけ
-- `app/routes/`: 将来的のエンドポイント分皂準備
-- `app/main.py`: アプリァクトリと走査控制
-
-### キos管理の改善 👀
-
-```python
-# 屔の dependencies を使用しても簡銖な設計
-from core.security import check_rate_limit
-from core.security import set_redis_manager
-
 @app.get("/api/info")
-async def get_video_info(
-    url: str,
-    ip: str = Depends(check_rate_limit)  # ※依存性注入
-):
-    ...
+async def get_video_info(url: str):
+    if not url or not _is_valid_url(url):
+        raise HTTPException(status_code=400, detail="Invalid URL format")
+    # ...
+
+@app.post("/api/download")
+async def create_download(request: DownloadRequest):
+    if request.format.lower() not in valid_formats:
+        raise HTTPException(status_code=400, detail=f"Invalid format...")
+    # ...
 ```
 
-### 例外釦理とロギングの改善 ⚠️
+#### 2. **Error Handling & Resilience** 🛡️
 
-例外処理を統一した各モジュール:
+**Improved error handling throughout:**
+- Added `asyncio.TimeoutError` handling with 408 status code
+- Graceful degradation in Redis operations
+- Proper resource cleanup with try-finally blocks
+- Better exception logging with `exc_info=True`
+- Timeout context on all async operations
 
-| モジュール | 例外釦理 | ログ出力 |
-|-----------|------------|--------|
-| `app/main.py` | ※例外からのメッセージ抽出 | DEBUG/INFO/WARNING |
-| `services/` | 接外先の連携適化 | INFO/ERROR |
-| `infrastructure/` | 外部サービスエラー | ERROR/CRITICAL |
+**Example:**
+```python
+try:
+    subtitles = await download_service.get_subtitles(url, lang)
+except asyncio.TimeoutError:
+    raise HTTPException(status_code=408, detail="Request timeout")
+except Exception as e:
+    logger.error(f"Failed to get subtitles: {e}", exc_info=True)
+    raise HTTPException(status_code=400, detail="...")
+```
 
-### 例外仈的ユースケース
+#### 3. **Enhanced Logging** 📊
+
+**Improved logging configuration:**
+- Detailed logging format with timestamp, logger name, level, message
+- More granular log levels (DEBUG, INFO, WARNING, ERROR)
+- Better startup/shutdown sequence logging
+- GPU encoder detection logging
+- Task creation/completion tracking
 
 ```python
-# services/download_service.py
-async def download(self, task_id: str):
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+```
+
+**Startup Sequence:**
+```
+INFO: Starting up yt-dlp API...
+INFO: ✓ Database initialized
+INFO: ✓ Redis connected
+INFO: ✓ Queue worker started
+INFO: ✅ yt-dlp API started successfully
+```
+
+#### 4. **Resource Cleanup** 🧹
+
+**Better resource management:**
+- Process cleanup in download function
+- Temporary file deletion in subtitle download
+- Proper database session closing in finally blocks
+- WebSocket connection cleanup
+
+```python
+finally:
+    db.close()
+    if task_id in self.active_processes:
+        del self.active_processes[task_id]
+    if process and not process.returncode:
+        try:
+            process.kill()
+        except Exception:
+            pass
+    await redis_manager.remove_from_active(task_id)
+```
+
+#### 5. **Health Check Enhancement** 🏥
+
+**Improved health endpoint:**
+- Returns connection status
+- Includes timestamp
+- More informative response structure
+- Better degraded state handling
+
+```python
+@app.get("/health")
+async def health_check():
+    redis_ok = await redis_manager.ping()
+    return {
+        "status": "healthy" if redis_ok else "degraded",
+        "redis": "connected" if redis_ok else "disconnected",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+```
+
+#### 6. **Redis Resilience** 💪
+
+**Redis error handling:**
+- Graceful degradation on connection failures
+- Rate limit check fails safely (allows request)
+- Retry on timeout enabled
+- Better error logging
+- Added `get_queue_length()` method
+
+```python
+async def check_rate_limit(self, ip: str) -> bool:
     try:
         # ...
-    except asyncio.TimeoutError:
-        logger.error(f"Download timeout for task {task_id}")
-        # 払出してキャッチを適約に
-        task.status = "failed"
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
-        # トレース情報を追加
-        task.status = "failed"
-    finally:
-        # リソース争割を回避
-        if db:
-            db.close()
+        logger.error(f"Error checking rate limit: {e}")
+        # Graceful degradation: allow request if redis fails
+        return True
 ```
 
-### ドキュメントの追加 📚
+#### 7. **API Documentation** 📚
 
-- `PROJECT_STRUCTURE.md`: 新しい構造を詳細に詳輾
-- 稼ぐを統一的に管理しやすい構造
-- 役割別の例外処理方法を記轘
+**Enhanced FastAPI configuration:**
+- Custom docs URL: `/api/docs`
+- Custom OpenAPI URL: `/api/openapi.json`
+- Better version numbering (1.0.3)
+- Improved API description
+
+```python
+app = FastAPI(
+    title="yt-dlp Download API",
+    description="Full-featured video/audio download API with queue management",
+    version="1.0.3",
+    docs_url="/api/docs",
+    openapi_url="/api/openapi.json"
+)
+```
+
+#### 8. **CORS Configuration** 🔐
+
+**Improved CORS handling:**
+- Strips whitespace from origins
+- Adds max_age directive (1 hour)
+- Better security warnings for wildcard CORS
+
+```python
+allowed_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
+# ...
+app.add_middleware(
+    CORSMiddleware,
+    # ...
+    max_age=3600,
+)
+```
+
+#### 9. **Database & Service Initialization** 🔧
+
+**Better startup logging:**
+- Separation of concerns in initialization
+- Clear logging of each initialization step
+- Error handling with proper exception context
+
+```python
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting up yt-dlp API...")
+    init_db()
+    logger.info("✓ Database initialized")
+    # ...
+```
+
+### Technical Improvements
+
+| Area | Before | After |
+|------|--------|-------|
+| **Input Validation** | Minimal | Comprehensive (URL, UUID, Language) |
+| **Error Handling** | Basic | Detailed with specific HTTP codes |
+| **Logging** | Simple format | Structured with timestamp & context |
+| **Resource Cleanup** | Partial | Complete with finally blocks |
+| **API Docs** | Default paths | Custom paths (/api/docs, /api/openapi.json) |
+| **Redis Error Handling** | Failures block requests | Graceful degradation |
+| **Health Check** | Simple status | Detailed with timestamp |
+| **Process Management** | Implicit cleanup | Explicit cleanup with safeguards |
+
+### New Dependencies
+
+```
+python-ulid==2.1.0  # For better unique ID handling (optional, for future use)
+```
+
+### Security Improvements 🔒
+
+1. **URL Validation**: Prevents injection attacks via URL parameters
+2. **UUID Validation**: Prevents unauthorized task access
+3. **Path Traversal Prevention**: Already present, now with logging
+4. **Input Sanitization**: Format and limit validation
+
+### Performance Impact
+
+- **Minimal**: Input validation is done early with fast regex/parsing
+- **Logging overhead**: Negligible with INFO level
+- **Resource cleanup**: Prevents memory leaks from unclosed processes
+
+### Testing Recommendations
+
+```bash
+# Test invalid URLs
+curl "http://localhost:8000/api/info?url=invalid"
+
+# Test invalid task IDs
+curl "http://localhost:8000/api/status/not-a-uuid"
+
+# Test rate limiting
+for i in {1..65}; do curl "http://localhost:8000/api/info?url=https://youtube.com"; done
+
+# Test timeout handling
+BLOCK_NETWORK=1 python test_timeout.py
+```
+
+### Backward Compatibility ✅
+
+- ✅ All endpoints remain the same
+- ✅ Response formats unchanged
+- ✅ API contract maintained
+- ⚠️ Invalid requests now properly rejected (breaking change for clients sending invalid input)
 
 ---
 
-## v1.0.1 - セキュリティとエラーハンドリングの改善
+## v1.0.2 - Project Structure Restructure
 
-手輔に詳からな推奨時精選は上辻の IMPROVEMENTS.md ファイルを参照してください。
-
----
-
-## テスト推奨事項
-
-### 機能テスト
-
-```bash
-# アプリ起動確認
-curl http://localhost:8000/health
-
-# トレースログの確認
-logs | grep -E "ERROR|CRITICAL"
-```
-
-### インテグレーションテスト
-
-```bash
-# プロジェクト整文インポートテスト
-from app.main import create_app
-app = create_app()  # 重複インスタンス生成不可
-```
-
-### 範嚲テスト
-
-```bash
-# 統液み後の依存関係確認
-python -m pytest tests/ -v
-```
+(See previous IMPROVEMENTS.md)
 
 ---
 
-Version: 1.0.2  
-Date: 2025-12-07  
-Status: ✅ プロダクション准備一覧
+**Version**: 1.0.3  
+**Release Date**: 2025-12-07  
+**Status**: ✅ Production Ready
