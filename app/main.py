@@ -8,6 +8,7 @@ from datetime import datetime
 from core.config import settings
 from core.security import set_redis_manager, is_feature_enabled
 from core.jwt_auth import jwt_auth
+from core.error_handler import ErrorContext
 from infrastructure.database import init_db
 from infrastructure.redis_manager import redis_manager
 from services.queue_worker import queue_worker
@@ -15,6 +16,7 @@ from app.error_responses import register_exception_handlers
 from app.endpoints import router as api_router
 from app.auth_endpoints import router as auth_router
 from app.progress_endpoints import router as progress_router
+from app.metrics_endpoints import router as metrics_router
 
 # Configure logging
 logging.basicConfig(
@@ -28,8 +30,8 @@ def create_app() -> FastAPI:
     
     app = FastAPI(
         title="yt-dlp Download API",
-        description="Full-featured video/audio download API with JWT authentication, feature flags, and progress tracking",
-        version="1.0.6",
+        description="Full-featured video/audio download API with JWT auth, progress tracking, job management, and comprehensive monitoring",
+        version="1.0.7",
         docs_url="/api/docs",
         openapi_url="/api/openapi.json"
     )
@@ -70,12 +72,17 @@ def create_app() -> FastAPI:
     else:
         logger.info("JWT authentication disabled")
     
+    # Register metrics routes
+    if is_feature_enabled("metrics"):
+        app.include_router(metrics_router)
+        logger.info("✓ Metrics endpoints enabled")
+    
     # Health check endpoint
     @app.get("/")
     async def root():
         return {
             "service": "yt-dlp Download API",
-            "version": "1.0.6",
+            "version": "1.0.7",
             "status": "running",
             "jwt_auth_enabled": jwt_auth.is_enabled(),
             "timestamp": datetime.utcnow().isoformat()
@@ -89,6 +96,7 @@ def create_app() -> FastAPI:
                 "status": "healthy" if redis_ok else "degraded",
                 "redis": "connected" if redis_ok else "disconnected",
                 "jwt_auth": jwt_auth.is_enabled(),
+                "worker": "running" if queue_worker.running else "stopped",
                 "timestamp": datetime.utcnow().isoformat()
             }
         except Exception as e:
@@ -123,40 +131,46 @@ def create_app() -> FastAPI:
             "custom_format": is_feature_enabled("custom_format"),
             "quality_selection": is_feature_enabled("quality_selection"),
             "proxy": is_feature_enabled("proxy"),
-            "cookies": is_feature_enabled("cookies")
+            "cookies": is_feature_enabled("cookies"),
+            "metrics": is_feature_enabled("metrics")
         }
     
     # Startup event
     @app.on_event("startup")
     async def startup_event():
         try:
-            logger.info("Starting up yt-dlp API...")
-            init_db()
-            logger.info("✓ Database initialized")
-            await redis_manager.connect()
-            logger.info("✓ Redis connected")
-            set_redis_manager(redis_manager)
-            asyncio.create_task(queue_worker.start())
-            logger.info("✓ Queue worker started")
+            logger.info("🚀 Starting up yt-dlp API v1.0.7...")
             
-            # Log authentication status
-            if jwt_auth.is_enabled():
-                if jwt_auth.can_issue_keys():
-                    logger.info("✓ JWT authentication enabled (API key issuance enabled)")
+            with ErrorContext("startup"):
+                init_db()
+                logger.info("✓ Database initialized")
+                
+                await redis_manager.connect()
+                logger.info("✓ Redis connected")
+                
+                set_redis_manager(redis_manager)
+                
+                asyncio.create_task(queue_worker.start())
+                logger.info("✓ Queue worker started")
+                
+                # Log authentication status
+                if jwt_auth.is_enabled():
+                    if jwt_auth.can_issue_keys():
+                        logger.info("✓ JWT authentication enabled (API key issuance enabled)")
+                    else:
+                        logger.info("✓ JWT authentication enabled (API key issuance disabled - set API_KEY_ISSUE_PASSWORD)")
                 else:
-                    logger.info("✓ JWT authentication enabled (API key issuance disabled - set API_KEY_ISSUE_PASSWORD)")
-            else:
-                logger.info("⚠️  JWT authentication disabled (set ENABLE_JWT_AUTH=true to enable)")
-            
-            # Log enabled features
-            enabled_features = [
-                feature.split("_", 1)[1].upper()
-                for feature in dir(settings)
-                if feature.startswith("ENABLE_FEATURE_") and getattr(settings, feature)
-            ]
-            logger.info(f"✓ Enabled features: {', '.join(enabled_features)}")
-            
-            logger.info("✅ yt-dlp API started successfully (v1.0.6)")
+                    logger.info("⚠️  JWT authentication disabled (set ENABLE_JWT_AUTH=true to enable)")
+                
+                # Log enabled features
+                enabled_features = [
+                    feature.split("_", 1)[1].upper()
+                    for feature in dir(settings)
+                    if feature.startswith("ENABLE_FEATURE_") and getattr(settings, feature)
+                ]
+                logger.info(f"✓ Enabled features: {', '.join(enabled_features[:10])}...")
+                
+                logger.info("✅ yt-dlp API started successfully (v1.0.7)")
         except Exception as e:
             logger.error(f"❌ Failed to start API: {e}", exc_info=True)
             raise
@@ -165,7 +179,7 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def shutdown_event():
         try:
-            logger.info("Shutting down yt-dlp API...")
+            logger.info("🛑 Shutting down yt-dlp API...")
             await queue_worker.stop()
             logger.info("✓ Queue worker stopped")
             await redis_manager.disconnect()
