@@ -1,204 +1,202 @@
-"""Redis connection management and utilities"""
-import redis.asyncio as redis
+"""Optimized Redis connection and operations manager"""
 import logging
-from typing import Optional
-from core.config import settings
 import json
+from typing import Any, Optional, Dict, List
+import asyncio
+from datetime import timedelta
+
+try:
+    import aioredis
+except ImportError:
+    try:
+        from redis import asyncio as aioredis
+    except ImportError:
+        aioredis = None
+
+from core.config import settings
+from core.error_handler import retry, NetworkError
 
 logger = logging.getLogger(__name__)
 
 class RedisManager:
-    """Manages Redis connections and operations"""
-    def __init__(self):
-        self.redis: Optional[redis.Redis] = None
+    """Optimized Redis manager with connection pooling and error handling"""
     
-    async def connect(self):
-        """Connect to Redis"""
+    def __init__(self):
+        self.redis = None
+        self.connected = False
+        self.connection_attempts = 0
+        self.max_connection_attempts = 5
+    
+    async def connect(self) -> bool:
+        """Connect to Redis with retry"""
+        if self.connected:
+            return True
+        
         try:
-            self.redis = await redis.from_url(
+            self.redis = await aioredis.from_url(
                 settings.REDIS_URL,
                 encoding="utf-8",
                 decode_responses=True,
-                socket_connect_timeout=5,
                 socket_keepalive=True,
-                retry_on_timeout=True
+                socket_keepalive_options={6: 1},  # TCP_KEEPIDLE
+                health_check_interval=30
             )
-            # Test connection
-            await self.redis.ping()
-            logger.info("✅ Redis connected successfully")
+            self.connected = True
+            self.connection_attempts = 0
+            logger.info(f"Connected to Redis: {settings.REDIS_URL}")
+            return True
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
-            raise
+            self.connection_attempts += 1
+            logger.error(f"Failed to connect to Redis (attempt {self.connection_attempts}): {e}")
+            raise NetworkError(f"Redis connection failed: {str(e)}")
     
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         """Disconnect from Redis"""
         if self.redis:
             try:
                 await self.redis.close()
-                logger.info("Redis disconnected")
+                self.connected = False
+                logger.info("Disconnected from Redis")
             except Exception as e:
-                logger.error(f"Error disconnecting from Redis: {e}")
+                logger.error(f"Error closing Redis connection: {e}")
     
     async def ping(self) -> bool:
-        """Health check for Redis connection"""
+        """Ping Redis server"""
+        if not self.connected:
+            return False
+        
         try:
-            if self.redis is None:
-                return False
-            result = await self.redis.ping()
-            return result is True
+            result = await asyncio.wait_for(self.redis.ping(), timeout=5)
+            return result
         except Exception as e:
-            logger.error(f"Redis health check failed: {e}")
+            logger.error(f"Redis ping failed: {e}")
+            self.connected = False
             return False
     
-    # Rate limiting
-    async def check_rate_limit(self, ip: str) -> bool:
-        """Check if IP has exceeded rate limit"""
+    @retry(max_attempts=3, backoff=0.5)
+    async def get(self, key: str) -> Optional[Any]:
+        """Get value from Redis with auto JSON deserialization"""
         try:
-            key = f"rate_limit:{ip}"
-            count = await self.redis.get(key)
-            
-            if count is None:
-                await self.redis.setex(key, 60, 1)
-                return True
-            
-            if int(count) >= settings.RATE_LIMIT_PER_MINUTE:
-                logger.warning(f"Rate limit exceeded for IP: {ip}")
-                return False
-            
-            await self.redis.incr(key)
-            return True
+            value = await self.redis.get(key)
+            if value and value.startswith('{') or value.startswith('['):
+                try:
+                    return json.loads(value)
+                except json.JSONDecodeError:
+                    return value
+            return value
         except Exception as e:
-            logger.error(f"Error checking rate limit for {ip}: {e}")
-            # Graceful degradation: allow request if redis fails
-            return True
-    
-    # Queue management
-    async def add_to_queue(self, task_id: str):
-        """Add task to pending queue"""
-        try:
-            await self.redis.rpush("queue:pending", task_id)
-            logger.info(f"Task added to queue: {task_id}")
-        except Exception as e:
-            logger.error(f"Error adding task to queue: {e}")
+            logger.error(f"Redis GET error for key {key}: {e}")
             raise
     
-    async def get_queue_position(self, task_id: str) -> int:
-        """Get position in queue"""
+    @retry(max_attempts=3, backoff=0.5)
+    async def set(self, key: str, value: Any, ex: int = 3600) -> bool:
+        """Set value in Redis with auto JSON serialization"""
         try:
-            queue = await self.redis.lrange("queue:pending", 0, -1)
-            try:
-                return queue.index(task_id) + 1
-            except ValueError:
-                return 0
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value)
+            await self.redis.set(key, value, ex=ex)
+            return True
         except Exception as e:
-            logger.error(f"Error getting queue position for {task_id}: {e}")
-            return 0
-    
-    async def get_queue_length(self) -> int:
-        """Get total pending queue length"""
-        try:
-            return await self.redis.llen("queue:pending")
-        except Exception as e:
-            logger.error(f"Error getting queue length: {e}")
-            return 0
-    
-    async def get_active_downloads(self) -> list:
-        """Get currently active download task IDs"""
-        try:
-            return list(await self.redis.smembers("queue:active"))
-        except Exception as e:
-            logger.error(f"Error getting active downloads: {e}")
-            return []
-    
-    async def add_to_active(self, task_id: str):
-        """Mark task as actively downloading"""
-        try:
-            await self.redis.sadd("queue:active", task_id)
-            await self.redis.lrem("queue:pending", 0, task_id)
-            logger.info(f"Task marked as active: {task_id}")
-        except Exception as e:
-            logger.error(f"Error marking task as active: {e}")
+            logger.error(f"Redis SET error for key {key}: {e}")
             raise
     
-    async def remove_from_active(self, task_id: str):
-        """Remove task from active downloads"""
+    @retry(max_attempts=3, backoff=0.5)
+    async def delete(self, *keys: str) -> int:
+        """Delete keys from Redis"""
         try:
-            await self.redis.srem("queue:active", task_id)
-            logger.info(f"Task removed from active: {task_id}")
+            return await self.redis.delete(*keys)
         except Exception as e:
-            logger.error(f"Error removing task from active: {e}")
+            logger.error(f"Redis DELETE error: {e}")
+            raise
     
-    async def can_start_download(self) -> bool:
-        """Check if we can start a new download"""
+    @retry(max_attempts=3, backoff=0.5)
+    async def increment_stat(self, key: str) -> int:
+        """Increment statistic counter"""
         try:
-            active_count = await self.redis.scard("queue:active")
-            can_start = active_count < settings.MAX_CONCURRENT_DOWNLOADS
-            if not can_start:
-                logger.info(f"Max concurrent downloads reached ({active_count}/{settings.MAX_CONCURRENT_DOWNLOADS})")
-            return can_start
+            return await self.redis.incr(key)
         except Exception as e:
-            logger.error(f"Error checking if download can start: {e}")
+            logger.error(f"Redis INCR error for key {key}: {e}")
+            raise
+    
+    @retry(max_attempts=3, backoff=0.5)
+    async def get_stat(self, key: str) -> int:
+        """Get statistic value"""
+        try:
+            value = await self.redis.get(key)
+            return int(value) if value else 0
+        except Exception as e:
+            logger.error(f"Redis GET stat error for key {key}: {e}")
+            return 0
+    
+    async def add_to_queue(self, task_id: str) -> bool:
+        """Add task to queue"""
+        try:
+            await self.redis.lpush("pending_tasks", task_id)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add task to queue: {e}")
             return False
     
     async def get_next_pending(self) -> Optional[str]:
-        """Get next pending task ID"""
+        """Get next pending task"""
         try:
-            task_id = await self.redis.lpop("queue:pending")
-            if task_id:
-                logger.info(f"Next pending task: {task_id}")
+            task_id = await self.redis.rpop("pending_tasks")
             return task_id
         except Exception as e:
-            logger.error(f"Error getting next pending task: {e}")
+            logger.error(f"Failed to get pending task: {e}")
             return None
     
-    # Task progress
-    async def set_progress(self, task_id: str, progress: dict):
-        """Store task progress"""
+    async def can_start_download(self) -> bool:
+        """Check if we can start a download"""
+        try:
+            active_count = await self.redis.scard("active_downloads")
+            return active_count < settings.MAX_CONCURRENT_DOWNLOADS
+        except Exception as e:
+            logger.error(f"Failed to check download capacity: {e}")
+            return False
+    
+    async def add_to_active(self, task_id: str) -> bool:
+        """Add task to active downloads"""
+        try:
+            await self.redis.sadd("active_downloads", task_id)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add task to active: {e}")
+            return False
+    
+    async def remove_from_active(self, task_id: str) -> bool:
+        """Remove task from active downloads"""
+        try:
+            await self.redis.srem("active_downloads", task_id)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to remove task from active: {e}")
+            return False
+    
+    async def get_queue_size(self) -> int:
+        """Get pending queue size"""
+        try:
+            return await self.redis.llen("pending_tasks")
+        except Exception as e:
+            logger.error(f"Failed to get queue size: {e}")
+            return 0
+    
+    async def get_active_count(self) -> int:
+        """Get active downloads count"""
+        try:
+            return await self.redis.scard("active_downloads")
+        except Exception as e:
+            logger.error(f"Failed to get active count: {e}")
+            return 0
+    
+    async def set_progress(self, task_id: str, progress_data: Dict) -> bool:
+        """Set progress data"""
         try:
             key = f"progress:{task_id}"
-            await self.redis.setex(key, 7200, json.dumps(progress))
+            return await self.set(key, progress_data, ex=86400*7)
         except Exception as e:
-            logger.error(f"Error setting progress for {task_id}: {e}")
-    
-    async def get_progress(self, task_id: str) -> Optional[dict]:
-        """Get task progress"""
-        try:
-            key = f"progress:{task_id}"
-            data = await self.redis.get(key)
-            return json.loads(data) if data else None
-        except json.JSONDecodeError:
-            logger.error(f"Invalid progress data for {task_id}")
-            return None
-        except Exception as e:
-            logger.error(f"Error getting progress for {task_id}: {e}")
-            return None
-    
-    # WebSocket connections
-    async def add_websocket(self, task_id: str, connection_id: str):
-        """Register WebSocket connection for task"""
-        try:
-            key = f"ws:{task_id}"
-            await self.redis.sadd(key, connection_id)
-            await self.redis.expire(key, 7200)
-            logger.info(f"WebSocket connection added for task: {task_id}")
-        except Exception as e:
-            logger.error(f"Error adding WebSocket connection: {e}")
-    
-    async def remove_websocket(self, task_id: str, connection_id: str):
-        """Remove WebSocket connection"""
-        try:
-            key = f"ws:{task_id}"
-            await self.redis.srem(key, connection_id)
-        except Exception as e:
-            logger.error(f"Error removing WebSocket connection: {e}")
-    
-    async def get_websockets(self, task_id: str) -> list:
-        """Get all WebSocket connections for task"""
-        try:
-            key = f"ws:{task_id}"
-            return list(await self.redis.smembers(key))
-        except Exception as e:
-            logger.error(f"Error getting WebSocket connections: {e}")
-            return []
+            logger.error(f"Failed to set progress: {e}")
+            return False
 
+# Global instance
 redis_manager = RedisManager()
