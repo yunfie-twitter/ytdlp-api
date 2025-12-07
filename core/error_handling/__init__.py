@@ -8,6 +8,14 @@ from core.error_handling.handlers import (
     sync_retry,
     log_error_summary
 )
+from core.error_handling.code_quality import (
+    CodeAnalyzer,
+    DocumentationAnalyzer,
+    StyleChecker,
+    RefactoringHelper,
+    MetricsCollector,
+    metrics_collector
+)
 
 __all__ = [
     'ErrorContext',
@@ -16,5 +24,11 @@ __all__ = [
     'sync_error_handler',
     'async_retry',
     'sync_retry',
-    'log_error_summary'
+    'log_error_summary',
+    'CodeAnalyzer',
+    'DocumentationAnalyzer',
+    'StyleChecker',
+    'RefactoringHelper',
+    'MetricsCollector',
+    'metrics_collector'
 ]
