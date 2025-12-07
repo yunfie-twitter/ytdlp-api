@@ -1,4 +1,4 @@
-"""API endpoints with comprehensive error handling"""
+"""API endpoints with comprehensive error handling and JWT authentication"""
 import asyncio
 import logging
 import os
@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Request, Query
 
 from core.config import settings
-from core.security import check_rate_limit
+from core.security import check_rate_limit, is_feature_enabled, get_optional_api_key
 from core.exceptions import (
     TaskNotFoundError,
     InvalidStateError,
@@ -30,14 +30,26 @@ from services.download_service import download_service
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["downloads"])
 
+# Helper function to check if feature is enabled
+def require_feature(feature_name: str):
+    """Check if feature is enabled, raise 403 if not"""
+    if not is_feature_enabled(feature_name):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Feature '{feature_name}' is disabled"
+        )
+
 # Video Info Endpoint
 @router.get("/info", response_model=VideoInfoResponse)
 @async_error_handler("get_video_info")
 async def get_video_info(
     url: str,
-    ip: str = Depends(check_rate_limit)
+    ip: str = Depends(check_rate_limit),
+    api_key: Optional[dict] = Depends(get_optional_api_key)
 ):
     """Get video information without downloading"""
+    require_feature("video_info")
+    
     with ErrorContext("get_video_info"):
         # Validate input
         url = InputValidator.validate_info_request(url)
@@ -64,9 +76,12 @@ async def create_download(
     request: DownloadRequest,
     req: Request,
     ip: str = Depends(check_rate_limit),
+    api_key: Optional[dict] = Depends(get_optional_api_key),
     db = Depends(get_db)
 ):
     """Create a new download task"""
+    require_feature("download")
+    
     with ErrorContext("create_download"):
         # Validate all input parameters
         url, format_type, quality = InputValidator.validate_download_request(
@@ -108,9 +123,12 @@ async def create_download(
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(
     task_id: str,
+    api_key: Optional[dict] = Depends(get_optional_api_key),
     db = Depends(get_db)
 ):
     """Get task status via polling"""
+    require_feature("status")
+    
     with ErrorContext("get_task_status", task_id=task_id):
         # Validate task ID
         task_id = UUIDValidator.validate_or_raise(task_id)
@@ -136,9 +154,12 @@ async def get_task_status(
 @router.get("/download/{task_id}")
 async def download_file(
     task_id: str,
+    api_key: Optional[dict] = Depends(get_optional_api_key),
     db = Depends(get_db)
 ):
     """Download the completed file"""
+    require_feature("file_download")
+    
     with ErrorContext("download_file", task_id=task_id):
         # Validate task ID
         task_id = UUIDValidator.validate_or_raise(task_id)
@@ -190,9 +211,12 @@ async def download_file(
 @router.post("/cancel/{task_id}")
 async def cancel_task(
     task_id: str,
+    api_key: Optional[dict] = Depends(get_optional_api_key),
     db = Depends(get_db)
 ):
     """Cancel a running download task"""
+    require_feature("cancel")
+    
     with ErrorContext("cancel_task", task_id=task_id):
         # Validate task ID
         task_id = UUIDValidator.validate_or_raise(task_id)
@@ -225,9 +249,12 @@ async def cancel_task(
 @router.delete("/task/{task_id}")
 async def delete_task(
     task_id: str,
+    api_key: Optional[dict] = Depends(get_optional_api_key),
     db = Depends(get_db)
 ):
     """Delete a task and its file"""
+    require_feature("delete")
+    
     with ErrorContext("delete_task", task_id=task_id):
         # Validate task ID
         task_id = UUIDValidator.validate_or_raise(task_id)
@@ -267,9 +294,12 @@ async def delete_task(
 async def list_tasks(
     status: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
+    api_key: Optional[dict] = Depends(get_optional_api_key),
     db = Depends(get_db)
 ):
     """List all tasks (optionally filtered by status)"""
+    require_feature("list_tasks")
+    
     with ErrorContext("list_tasks"):
         query = db.query(DownloadTask)
         
@@ -304,9 +334,12 @@ async def list_tasks(
 @router.get("/thumbnail/{task_id}")
 async def get_thumbnail(
     task_id: str,
+    api_key: Optional[dict] = Depends(get_optional_api_key),
     db = Depends(get_db)
 ):
     """Get thumbnail URL for a task"""
+    require_feature("thumbnail")
+    
     with ErrorContext("get_thumbnail", task_id=task_id):
         # Validate task ID
         task_id = UUIDValidator.validate_or_raise(task_id)
@@ -326,9 +359,12 @@ async def get_thumbnail(
 async def get_subtitles(
     url: str,
     lang: str = Query("en"),
-    ip: str = Depends(check_rate_limit)
+    ip: str = Depends(check_rate_limit),
+    api_key: Optional[dict] = Depends(get_optional_api_key)
 ):
     """Download subtitles for a video"""
+    require_feature("subtitles")
+    
     with ErrorContext("get_subtitles"):
         # Validate input
         url, lang = InputValidator.validate_subtitle_request(url, lang)
@@ -355,8 +391,12 @@ async def get_subtitles(
 
 # Queue Stats Endpoint
 @router.get("/queue/stats")
-async def get_queue_stats():
+async def get_queue_stats(
+    api_key: Optional[dict] = Depends(get_optional_api_key)
+):
     """Get queue statistics"""
+    require_feature("queue_stats")
+    
     with ErrorContext("get_queue_stats"):
         try:
             active = await redis_manager.get_active_downloads()
