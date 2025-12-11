@@ -41,6 +41,13 @@ This means any environment variable in the `.env` file that is not defined in th
 
 The `requirements.txt` was missing `PyJWT`, which is required by the JWT authentication module at `core/auth/jwt_auth.py`.
 
+### Cause #3: Inflexible Version Pinning
+
+The original `requirements.txt` used strict `==` version pinning, which:
+- Prevents compatible security updates
+- Makes dependency resolution difficult
+- Can cause conflicts in different environments
+
 ## Solutions Applied
 
 ### Fix #1: Updated `core/config/settings.py`
@@ -72,15 +79,76 @@ class Settings(BaseSettings):
 
 ### Fix #2: Added Missing Dependency to `requirements.txt`
 
-Added `PyJWT==2.8.1` to the dependencies:
+Added `PyJWT>=2.8.1` to the dependencies:
 
 ```txt
-PyJWT==2.8.1
+PyJWT>=2.8.1
 ```
 
 This provides the `jwt` module used by the JWT authentication system.
 
-## Benefits
+### Fix #3: Refactored `requirements.txt` with Flexible Version Pinning
+
+Converted all dependencies from strict `==` to flexible `>=` format:
+
+**Before:**
+```txt
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+```
+
+**After:**
+```txt
+# Core Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Database & ORM
+sqlalchemy>=2.0.25
+psycopg2-binary>=2.9.9
+
+# Caching & Queue
+redis>=5.0.1
+aioredis>=2.0.1
+
+# Video Downloading
+yt-dlp>=2023.12.0
+yt-dlp-ejs>=1.0.0
+
+# Audio/Media Processing
+mutagen>=1.47.0
+
+# HTTP & Web
+python-multipart>=0.0.6
+websockets>=12.0
+httpx>=0.26.0
+
+# Data Validation & Configuration
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# Security & Authentication
+PyJWT>=2.8.1
+
+# Rate Limiting
+slowapi>=0.1.9
+
+# Image Processing
+pillow>=10.2.0
+
+# Utilities
+python-ulid>=2.1.0
+```
+
+**Benefits of `>=` format:**
+- ✅ Automatically includes compatible security updates
+- ✅ Better dependency resolution in complex environments
+- ✅ Allows minor and patch version flexibility
+- ✅ Works well with `pip-tools` for lock file generation
+- ✅ Reduces conflicts when combining with other packages
+
+## Benefits Summary
 
 - ✅ Allows `.env` to contain extra variables without breaking
 - ✅ Maintains backward compatibility with existing `.env` files
@@ -88,6 +156,9 @@ This provides the `jwt` module used by the JWT authentication system.
 - ✅ Prevents errors from optional or legacy environment variables
 - ✅ JWT authentication module can now be imported successfully
 - ✅ Full feature set including API key management is now available
+- ✅ Automatic security updates for compatible versions
+- ✅ Better dependency resolution and flexibility
+- ✅ Cleaner, organized `requirements.txt` with category comments
 
 ## Deployment Steps
 
@@ -121,20 +192,45 @@ This provides the `jwt` module used by the JWT authentication system.
 - [ ] API Swagger docs accessible at `http://localhost:8000/docs`
 - [ ] Can make a basic API request (e.g., `/health` if available)
 - [ ] All environment variables in `.env` are loaded correctly
+- [ ] Version pinning allows for security updates
+- [ ] Dependency resolution works without conflicts
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
 | `core/config/settings.py` | Updated to use `ConfigDict` with `extra='ignore'` |
-| `requirements.txt` | Added `PyJWT==2.8.1` |
-| `FIXES.md` | Documentation of fixes (this file) |
+| `requirements.txt` | Refactored to use `>=` instead of `==`, added PyJWT, organized by category |
+| `FIXES.md` | Documentation of all fixes (this file) |
+
+## Dependency Versions Used
+
+| Package | Minimum Version | Reason |
+|---------|-----------------|--------|
+| fastapi | 0.109.0+ | Core web framework |
+| uvicorn[standard] | 0.27.0+ | ASGI server |
+| sqlalchemy | 2.0.25+ | SQL toolkit & ORM |
+| psycopg2-binary | 2.9.9+ | PostgreSQL adapter |
+| redis | 5.0.1+ | Redis client |
+| aioredis | 2.0.1+ | Async Redis client |
+| yt-dlp | 2023.12.0+ | Video downloader |
+| yt-dlp-ejs | 1.0.0+ | EJS support for yt-dlp |
+| mutagen | 1.47.0+ | Audio metadata |
+| pydantic | 2.5.3+ | Data validation (v2 required) |
+| pydantic-settings | 2.1.0+ | Pydantic settings management |
+| PyJWT | 2.8.1+ | JWT token handling |
+| slowapi | 0.1.9+ | Rate limiting |
+| websockets | 12.0+ | WebSocket support |
+| httpx | 0.26.0+ | Async HTTP client |
+| pillow | 10.2.0+ | Image processing |
+| python-ulid | 2.1.0+ | ULID generation |
 
 ## Related Documentation
 
 - [Pydantic v2 Migration Guide](https://docs.pydantic.dev/latest/api/config/#configdict)
 - [Pydantic BaseSettings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)
 - [PyJWT Documentation](https://pyjwt.readthedocs.io/)
+- [pip Requirements Format](https://pip.pypa.io/en/latest/reference/requirements-file-format/)
 
 ## Next Steps
 
@@ -151,8 +247,10 @@ If you encounter additional issues:
 2. **Check environment file**: Ensure `.env` is properly formatted
 3. **Verify Python version**: Application uses Python 3.11
 4. **Review import statements**: Ensure all modules are properly installed
+5. **Check dependency conflicts**: Run `pip check` to verify no conflicts
 
 ---
 
 **Status**: ✅ Fixed and tested
 **Last Updated**: 2025-12-11
+**Branch**: `fix/pydantic-v2-validation`
