@@ -6,11 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 
 from core.config import settings
-from core.security import set_redis_manager, is_feature_enabled
-from core.jwt_auth import jwt_auth
-from core.error_handler import ErrorContext
-from core.logging_middleware import LoggingMiddleware
-from core.logging_config import setup_logging
+from core import set_redis_manager, is_feature_enabled, jwt_auth, ErrorContext, setup_logging, LoggingMiddleware
 from infrastructure.database import init_db
 from infrastructure.redis_manager import redis_manager
 from services.queue_worker import queue_worker
