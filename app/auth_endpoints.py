@@ -4,8 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional
 
-from core.jwt_auth import jwt_auth
-from core.security import verify_api_key
+from core import jwt_auth, verify_api_key
 from core.exceptions import APIException
 
 logger = logging.getLogger(__name__)
