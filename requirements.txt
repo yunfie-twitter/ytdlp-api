@@ -1,18 +1,40 @@
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-sqlalchemy==2.0.25
-psycopg2-binary==2.9.9
-redis==5.0.1
-aioredis==2.0.1
-yt-dlp
-yt-dlp-ejs
-mutagen==1.47.0
-python-multipart==0.0.6
-pydantic==2.5.3
-pydantic-settings==2.1.0
-python-dotenv==1.0.0
-slowapi==0.1.9
-websockets==12.0
-httpx==0.26.0
-pillow==10.2.0
-python-ulid==2.1.0
+# Core Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Database & ORM
+sqlalchemy>=2.0.25
+psycopg2-binary>=2.9.9
+
+# Caching & Queue
+redis>=5.0.1
+aioredis>=2.0.1
+
+# Video Downloading
+yt-dlp>=2023.12.0
+yt-dlp-ejs>=1.0.0
+
+# Audio/Media Processing
+mutagen>=1.47.0
+
+# HTTP & Web
+python-multipart>=0.0.6
+websockets>=12.0
+httpx>=0.26.0
+
+# Data Validation & Configuration
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# Security & Authentication
+PyJWT>=2.8.1
+
+# Rate Limiting
+slowapi>=0.1.9
+
+# Image Processing
+pillow>=10.2.0
+
+# Utilities
+python-ulid>=2.1.0
