@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Request, Query
 
 from core.config import settings
-from core.security import check_rate_limit, is_feature_enabled, get_optional_api_key
+from core import check_rate_limit, is_feature_enabled, get_optional_api_key, ErrorContext, async_error_handler
 from core.exceptions import (
     TaskNotFoundError,
     InvalidStateError,
@@ -18,7 +18,6 @@ from core.exceptions import (
     VideoInfoError
 )
 from core.validation import InputValidator, UUIDValidator
-from core.error_handler import ErrorContext, async_error_handler
 from app.models import (
     DownloadRequest, TaskResponse, TaskStatusResponse, VideoInfoResponse
 )
