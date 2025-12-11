@@ -5,8 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from core.validation import UUIDValidator
-from core.security import get_optional_api_key, is_feature_enabled
-from core.error_handler import ErrorContext
+from core import get_optional_api_key, is_feature_enabled, ErrorContext
 from core.exceptions import TaskNotFoundError
 from infrastructure.progress_tracker import progress_tracker
 from infrastructure.database import get_db, DownloadTask
