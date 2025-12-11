@@ -3,11 +3,8 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from datetime import datetime, timezone
 
-from core.security import get_optional_api_key
-from core.error_handler import ErrorContext
+from core import get_optional_api_key, ErrorContext
 from core.performance import performance_monitor, profile
-from core.code_quality import metrics_collector
-from core.database_optimization import query_cache
 from infrastructure.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -51,7 +48,8 @@ async def get_cache_performance(
     """Get cache performance statistics"""
     
     with ErrorContext("get_cache_performance"):
-        stats = query_cache.get_stats()
+        from core.cache import cache_manager
+        stats = cache_manager.get_stats()
         
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -66,6 +64,7 @@ async def get_code_quality(
     """Get code quality metrics"""
     
     with ErrorContext("get_code_quality"):
+        from core.error_handling import metrics_collector
         report = metrics_collector.get_quality_report()
         
         return {
@@ -81,6 +80,7 @@ async def get_optimization_recommendations(
     """Get optimization recommendations"""
     
     with ErrorContext("get_optimization_recommendations"):
+        from core.cache import cache_manager
         recommendations = []
         
         # Check system resources
@@ -101,7 +101,7 @@ async def get_optimization_recommendations(
             })
         
         # Check cache performance
-        cache_stats = query_cache.get_stats()
+        cache_stats = cache_manager.get_stats()
         if float(cache_stats.get("hit_rate", "0%").rstrip("%")) < 30:
             recommendations.append({
                 "type": "cache",
