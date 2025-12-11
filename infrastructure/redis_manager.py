@@ -4,14 +4,7 @@ import json
 from typing import Any, Optional, Dict, List
 import asyncio
 from datetime import timedelta
-
-try:
-    import aioredis
-except ImportError:
-    try:
-        from redis import asyncio as aioredis
-    except ImportError:
-        aioredis = None
+from redis import asyncio as aioredis
 
 from core.config import settings
 from core.error_handler import retry, NetworkError
