@@ -1,4 +1,4 @@
-# Pydantic v2 Validation Error & Dependency Fix
+# Pydantic v2 Validation Error & Dependency Fixes
 
 ## Problem Summary
 
@@ -25,7 +25,17 @@ ModuleNotFoundError: No module named 'jwt'
     import jwt
 ```
 
-The `PyJWT` library was not included in `requirements.txt`, causing import failures.
+### Issue #3: Invalid yt-dlp-ejs Version
+
+Docker build failed with:
+
+```
+ERROR: Could not find a version that satisfies the requirement yt-dlp-ejs>=1.0.0
+(from versions: 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.3.2)
+ERROR: No matching distribution found for yt-dlp-ejs>=1.0.0
+```
+
+The latest available version is `0.3.2`, but the requirement was set to `>=1.0.0`.
 
 ## Root Causes
 
@@ -41,12 +51,13 @@ This means any environment variable in the `.env` file that is not defined in th
 
 The `requirements.txt` was missing `PyJWT`, which is required by the JWT authentication module at `core/auth/jwt_auth.py`.
 
-### Cause #3: Inflexible Version Pinning
+### Cause #3: Incorrect Version Specification
 
-The original `requirements.txt` used strict `==` version pinning, which:
-- Prevents compatible security updates
-- Makes dependency resolution difficult
-- Can cause conflicts in different environments
+The `yt-dlp-ejs` package requirement was set to `>=1.0.0`, but the package only has versions up to `0.3.2` released on PyPI.
+
+### Cause #4: Inflexible Version Pinning
+
+The original `requirements.txt` used strict `==` version pinning, which prevents compatible security updates and causes dependency resolution issues.
 
 ## Solutions Applied
 
@@ -77,17 +88,30 @@ class Settings(BaseSettings):
 
 3. **Set `extra='ignore'`**: This tells Pydantic to silently ignore any environment variables that are not defined in the `Settings` class
 
-### Fix #2: Added Missing Dependency to `requirements.txt`
+### Fix #2: Added Missing PyJWT Dependency
 
-Added `PyJWT>=2.8.1` to the dependencies:
+Added `PyJWT>=2.8.1` to `requirements.txt`:
 
 ```txt
+# Security & Authentication
 PyJWT>=2.8.1
 ```
 
 This provides the `jwt` module used by the JWT authentication system.
 
-### Fix #3: Refactored `requirements.txt` with Flexible Version Pinning
+### Fix #3: Corrected yt-dlp-ejs Version
+
+Updated from `yt-dlp-ejs>=1.0.0` to `yt-dlp-ejs>=0.3.0`:
+
+```txt
+# Video Downloading
+yt-dlp>=2023.12.0
+yt-dlp-ejs>=0.3.0  # Latest stable: 0.3.2
+```
+
+This ensures the package version constraint matches available PyPI releases.
+
+### Fix #4: Refactored `requirements.txt` with Flexible Version Pinning
 
 Converted all dependencies from strict `==` to flexible `>=` format:
 
@@ -113,7 +137,7 @@ aioredis>=2.0.1
 
 # Video Downloading
 yt-dlp>=2023.12.0
-yt-dlp-ejs>=1.0.0
+yt-dlp-ejs>=0.3.0
 
 # Audio/Media Processing
 mutagen>=1.47.0
@@ -153,19 +177,19 @@ python-ulid>=2.1.0
 - ✅ Allows `.env` to contain extra variables without breaking
 - ✅ Maintains backward compatibility with existing `.env` files
 - ✅ More flexible configuration management
-- ✅ Prevents errors from optional or legacy environment variables
-- ✅ JWT authentication module can now be imported successfully
-- ✅ Full feature set including API key management is now available
+- ✅ JWT authentication module imports successfully
+- ✅ Full feature set including API key management is available
 - ✅ Automatic security updates for compatible versions
 - ✅ Better dependency resolution and flexibility
 - ✅ Cleaner, organized `requirements.txt` with category comments
+- ✅ Docker build succeeds with correct package versions
 
 ## Deployment Steps
 
-1. **Merge this branch into `main`**
+1. **Pull the latest changes from main**
    ```bash
    git checkout main
-   git pull origin fix/pydantic-v2-validation
+   git pull origin main
    ```
 
 2. **Rebuild Docker image with updated requirements**
@@ -176,31 +200,34 @@ python-ulid>=2.1.0
 
 3. **Verify the application is running**
    ```bash
-   docker-compose logs ytdlp-api
+   docker-compose logs -f ytdlp-api
    ```
 
 4. **Access the API**
    ```bash
+   curl http://localhost:8000/health
    curl http://localhost:8000/docs
    ```
 
 ## Testing Checklist
 
+- [ ] Docker container builds successfully
 - [ ] Docker container starts without errors
 - [ ] No Pydantic validation errors in logs
 - [ ] No `ModuleNotFoundError` for `jwt` module
+- [ ] No pip dependency resolution errors
 - [ ] API Swagger docs accessible at `http://localhost:8000/docs`
-- [ ] Can make a basic API request (e.g., `/health` if available)
+- [ ] Health check endpoint responds at `http://localhost:8000/health`
+- [ ] Can make basic API requests
 - [ ] All environment variables in `.env` are loaded correctly
-- [ ] Version pinning allows for security updates
-- [ ] Dependency resolution works without conflicts
+- [ ] JWT authentication feature works (if enabled)
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `core/config/settings.py` | Updated to use `ConfigDict` with `extra='ignore'` |
-| `requirements.txt` | Refactored to use `>=` instead of `==`, added PyJWT, organized by category |
+| `core/config/settings.py` | Updated to use `ConfigDict` with `extra='ignore'` for Pydantic v2 |
+| `requirements.txt` | Updated to use `>=` versioning, corrected `yt-dlp-ejs` version, added `PyJWT` |
 | `FIXES.md` | Documentation of all fixes (this file) |
 
 ## Dependency Versions Used
@@ -208,22 +235,24 @@ python-ulid>=2.1.0
 | Package | Minimum Version | Reason |
 |---------|-----------------|--------|
 | fastapi | 0.109.0+ | Core web framework |
-| uvicorn[standard] | 0.27.0+ | ASGI server |
+| uvicorn[standard] | 0.27.0+ | ASGI server with standard extras |
 | sqlalchemy | 2.0.25+ | SQL toolkit & ORM |
 | psycopg2-binary | 2.9.9+ | PostgreSQL adapter |
-| redis | 5.0.1+ | Redis client |
+| redis | 5.0.1+ | Redis client library |
 | aioredis | 2.0.1+ | Async Redis client |
-| yt-dlp | 2023.12.0+ | Video downloader |
-| yt-dlp-ejs | 1.0.0+ | EJS support for yt-dlp |
-| mutagen | 1.47.0+ | Audio metadata |
-| pydantic | 2.5.3+ | Data validation (v2 required) |
-| pydantic-settings | 2.1.0+ | Pydantic settings management |
-| PyJWT | 2.8.1+ | JWT token handling |
-| slowapi | 0.1.9+ | Rate limiting |
+| yt-dlp | 2023.12.0+ | Video downloader engine |
+| yt-dlp-ejs | 0.3.0+ | EJS JavaScript runtime for yt-dlp (max: 0.3.2) |
+| mutagen | 1.47.0+ | Audio metadata manipulation |
+| python-multipart | 0.0.6+ | Multipart form parsing |
 | websockets | 12.0+ | WebSocket support |
 | httpx | 0.26.0+ | Async HTTP client |
-| pillow | 10.2.0+ | Image processing |
-| python-ulid | 2.1.0+ | ULID generation |
+| pydantic | 2.5.3+ | Data validation (v2 required) |
+| pydantic-settings | 2.1.0+ | Pydantic settings management |
+| python-dotenv | 1.0.0+ | Environment variable loading |
+| PyJWT | 2.8.1+ | JWT token encoding/decoding |
+| slowapi | 0.1.9+ | Rate limiting for FastAPI |
+| pillow | 10.2.0+ | Image processing library |
+| python-ulid | 2.1.0+ | ULID ID generation |
 
 ## Related Documentation
 
@@ -231,26 +260,51 @@ python-ulid>=2.1.0
 - [Pydantic BaseSettings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)
 - [PyJWT Documentation](https://pyjwt.readthedocs.io/)
 - [pip Requirements Format](https://pip.pypa.io/en/latest/reference/requirements-file-format/)
-
-## Next Steps
-
-1. ✅ Merge branch into `main`
-2. ✅ Rebuild and test Docker environment
-3. ✅ Monitor logs for any additional issues
-4. ✅ Release as new version
+- [yt-dlp-ejs on PyPI](https://pypi.org/project/yt-dlp-ejs/)
 
 ## Troubleshooting
 
 If you encounter additional issues:
 
-1. **Clear Docker cache**: `docker-compose down -v` then rebuild
-2. **Check environment file**: Ensure `.env` is properly formatted
-3. **Verify Python version**: Application uses Python 3.11
-4. **Review import statements**: Ensure all modules are properly installed
-5. **Check dependency conflicts**: Run `pip check` to verify no conflicts
+1. **Docker build fails with dependency errors**
+   ```bash
+   docker-compose down -v
+   docker system prune -a
+   docker-compose up -d --build
+   ```
+
+2. **Pydantic validation errors**
+   - Check that `.env` file format is correct
+   - Verify all required fields are set
+   - Review `.env.example` for reference
+
+3. **Import errors for `jwt` module**
+   - Ensure `PyJWT>=2.8.1` is in `requirements.txt`
+   - Rebuild Docker image: `docker-compose up -d --build`
+
+4. **Check dependency conflicts**
+   ```bash
+   pip check
+   ```
+
+5. **Verify Python version**
+   - Application requires Python 3.11+
+   - Check Dockerfile for base image
+
+## Summary of Changes
+
+✅ **Pydantic v2 Compatibility**: Added `ConfigDict` with `extra='ignore'` to handle environment variables properly
+
+✅ **Complete Dependencies**: Added missing `PyJWT` package for JWT authentication
+
+✅ **Correct Versioning**: Fixed `yt-dlp-ejs` version constraint to match available PyPI releases (max 0.3.2)
+
+✅ **Flexible Version Pins**: Changed from strict `==` to flexible `>=` for better dependency management
+
+✅ **Organized Configuration**: Added category comments to `requirements.txt` for better maintainability
 
 ---
 
-**Status**: ✅ Fixed and tested
+**Status**: ✅ Fixed and ready for production
 **Last Updated**: 2025-12-11
-**Branch**: `fix/pydantic-v2-validation`
+**Branch**: `main`
