@@ -7,7 +7,8 @@ from datetime import timedelta
 from redis import asyncio as aioredis
 
 from core.config import settings
-from core.error_handler import retry, NetworkError
+from core.exceptions import RedisError
+from core.error_handling import async_retry, RetryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,12 @@ class RedisManager:
         self.connected = False
         self.connection_attempts = 0
         self.max_connection_attempts = 5
+        self.retry_config = RetryConfig(
+            max_attempts=3,
+            backoff=0.5,
+            backoff_multiplier=2.0,
+            exceptions=(Exception,)
+        )
     
     async def connect(self) -> bool:
         """Connect to Redis with retry"""
@@ -41,7 +48,7 @@ class RedisManager:
         except Exception as e:
             self.connection_attempts += 1
             logger.error(f"Failed to connect to Redis (attempt {self.connection_attempts}): {e}")
-            raise NetworkError(f"Redis connection failed: {str(e)}")
+            raise RedisError(f"Redis connection failed: {str(e)}")
     
     async def disconnect(self) -> None:
         """Disconnect from Redis"""
@@ -66,12 +73,16 @@ class RedisManager:
             self.connected = False
             return False
     
-    @retry(max_attempts=3, backoff=0.5)
+    @async_retry(RetryConfig(
+        max_attempts=3,
+        backoff=0.5,
+        exceptions=(Exception,)
+    ))
     async def get(self, key: str) -> Optional[Any]:
         """Get value from Redis with auto JSON deserialization"""
         try:
             value = await self.redis.get(key)
-            if value and value.startswith('{') or value.startswith('['):
+            if value and (value.startswith('{') or value.startswith('[')):
                 try:
                     return json.loads(value)
                 except json.JSONDecodeError:
@@ -81,7 +92,11 @@ class RedisManager:
             logger.error(f"Redis GET error for key {key}: {e}")
             raise
     
-    @retry(max_attempts=3, backoff=0.5)
+    @async_retry(RetryConfig(
+        max_attempts=3,
+        backoff=0.5,
+        exceptions=(Exception,)
+    ))
     async def set(self, key: str, value: Any, ex: int = 3600) -> bool:
         """Set value in Redis with auto JSON serialization"""
         try:
@@ -93,7 +108,11 @@ class RedisManager:
             logger.error(f"Redis SET error for key {key}: {e}")
             raise
     
-    @retry(max_attempts=3, backoff=0.5)
+    @async_retry(RetryConfig(
+        max_attempts=3,
+        backoff=0.5,
+        exceptions=(Exception,)
+    ))
     async def delete(self, *keys: str) -> int:
         """Delete keys from Redis"""
         try:
@@ -102,7 +121,11 @@ class RedisManager:
             logger.error(f"Redis DELETE error: {e}")
             raise
     
-    @retry(max_attempts=3, backoff=0.5)
+    @async_retry(RetryConfig(
+        max_attempts=3,
+        backoff=0.5,
+        exceptions=(Exception,)
+    ))
     async def increment_stat(self, key: str) -> int:
         """Increment statistic counter"""
         try:
@@ -111,7 +134,11 @@ class RedisManager:
             logger.error(f"Redis INCR error for key {key}: {e}")
             raise
     
-    @retry(max_attempts=3, backoff=0.5)
+    @async_retry(RetryConfig(
+        max_attempts=3,
+        backoff=0.5,
+        exceptions=(Exception,)
+    ))
     async def get_stat(self, key: str) -> int:
         """Get statistic value"""
         try:
