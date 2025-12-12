@@ -1,5 +1,6 @@
 """Input validation utilities"""
 import re
+import logging
 from typing import Optional, List
 from urllib.parse import urlparse
 import uuid as uuid_lib
@@ -10,6 +11,8 @@ from core.exceptions import (
     InvalidLanguageCodeError,
     InvalidFormatError
 )
+
+logger = logging.getLogger(__name__)
 
 class URLValidator:
     """URL validation utilities"""
@@ -131,12 +134,17 @@ class QualityValidator:
     
     @staticmethod
     def validate_or_raise(quality: str) -> Optional[str]:
-        """Validate quality and raise exception if invalid"""
-        if quality and not QualityValidator.validate(quality):
-            raise InvalidFormatError(
-                f"quality: {quality}",
-                list(QualityValidator.VALID_QUALITIES) + ['XXXp (e.g., 1080p)']
-            )
+        """Validate quality and raise exception if invalid, fallback to 'best' if not provided"""
+        # If quality is not provided or empty, use default 'best'
+        if not quality:
+            return 'best'
+        
+        # Validate the provided quality
+        if not QualityValidator.validate(quality):
+            # Log warning and fallback to 'best'
+            logger.warning(f"Invalid quality '{quality}', falling back to 'best'")
+            return 'best'
+        
         return quality
 
 class LimitValidator:
