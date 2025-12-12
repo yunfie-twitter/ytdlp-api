@@ -57,8 +57,7 @@ from core.error_handling import (
     DocumentationAnalyzer,
     StyleChecker,
     RefactoringHelper,
-    MetricsCollector,
-    metrics_collector
+    MetricsCollector
 )
 
 # Validation
@@ -164,7 +163,6 @@ __all__ = [
     'StyleChecker',
     'RefactoringHelper',
     'MetricsCollector',
-    'metrics_collector',
     # Validation
     'URLValidator',
     'UUIDValidator',
