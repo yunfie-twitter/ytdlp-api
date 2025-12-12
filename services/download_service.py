@@ -241,25 +241,43 @@ class DownloadService:
     
     def _get_format_options(self, format_type: str, format_id: Optional[str] = None, 
                            quality: Optional[str] = None) -> tuple:
-        """Get yt-dlp format string and output extension"""
-        if format_id:
-            ext = "mp4" if "+" in format_id else format_type.lower()
-            return (format_id, ext)
+        """Get yt-dlp format string and output extension
         
+        Format precedence:
+        1. format_id (if provided) -> highest quality format or use best fallback
+        2. quality (if provided) -> specific quality or best fallback
+        3. format_type -> predefined formats with audio fallback
+        """
+        
+        # 1. If format_id is provided, use it with fallback chain
+        if format_id:
+            # Try the exact format first, then fallback to best
+            format_string = f"{format_id}/bestvideo+bestaudio/best"
+            ext = "mp4" if "+" in format_id else format_type.lower()
+            logger.info(f"Using format_id with fallback: {format_string}")
+            return (format_string, ext)
+        
+        # 2. If quality is provided, use it with fallback chain
         if quality:
             if quality == "best":
-                return ("bestvideo+bestaudio/best", "mp4")
+                # Best video + best audio with multiple fallbacks
+                return ("bestvideo+bestaudio/bestvideo[vcodec!=?=none]+bestaudio[acodec!=?=none]/best", "mp4")
             elif quality == "worst":
                 return ("worstvideo+worstaudio/worst", "mp4")
             elif quality.endswith("p"):
                 height = quality[:-1]
-                format_str = f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+                # Use height filter with audio fallback
+                format_str = f"bestvideo[height<={height}]+bestaudio[acodec!=?=none]/bestvideo[height<={height}]+bestaudio/best[height<={height}]"
                 return (format_str, "mp4")
+            else:
+                # Unknown quality, fallback to best
+                return ("bestvideo+bestaudio/bestvideo[vcodec!=?=none]+bestaudio[acodec!=?=none]/best", "mp4")
         
+        # 3. Use predefined format types with audio fallback
         format_map = {
             "mp3": ("bestaudio", "mp3"),
-            "mp4": ("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best", "mp4"),
-            "best": ("bestvideo+bestaudio/best", "mp4"),
+            "mp4": ("bestvideo+bestaudio[acodec!=?=none]/bestvideo+bestaudio/best", "mp4"),
+            "best": ("bestvideo+bestaudio[acodec!=?=none]/bestvideo[vcodec!=?=none]+bestaudio[acodec!=?=none]/best", "mp4"),
             "audio": ("bestaudio", "m4a"),
             "video": ("bestvideo", "mp4"),
             "webm": ("bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]", "webm"),
@@ -267,7 +285,10 @@ class DownloadService:
             "flac": ("bestaudio", "flac"),
             "aac": ("bestaudio", "aac")
         }
-        return format_map.get(format_type.lower(), ("best", "mp4"))
+        
+        format_string, ext = format_map.get(format_type.lower(), ("best", "mp4"))
+        logger.info(f"Using predefined format '{format_type}': {format_string}")
+        return (format_string, ext)
     
     async def download(self, task_id: str):
         """Execute download task"""
@@ -322,6 +343,8 @@ class DownloadService:
                 cmd.extend(["--cookies", settings.YTDLP_COOKIES_FILE])
             
             env = self._get_deno_env()
+            
+            logger.info(f"Executing yt-dlp command with format: {format_string}")
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
