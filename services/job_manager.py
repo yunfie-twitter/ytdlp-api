@@ -8,7 +8,7 @@ import uuid
 
 from infrastructure.redis_manager import redis_manager
 from core.config import settings
-from core.error_handler import ErrorContext, retry, APIError
+from core.error_handling import ErrorContext
 
 logger = logging.getLogger(__name__)
 
