@@ -3,19 +3,27 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Request, Query
 
 from core.config import settings
-from core import check_rate_limit, is_feature_enabled, get_optional_api_key, ErrorContext
+from core import (
+    check_rate_limit,
+    is_feature_enabled,
+    get_optional_api_key,
+    ErrorContext,
+    log_error_summary
+)
 from core.exceptions import (
     TaskNotFoundError,
     InvalidStateError,
     FileAccessError,
     PathTraversalError,
     DownloadTimeoutError,
-    VideoInfoError
+    VideoInfoError,
+    APIException,
+    InternalServerError
 )
 from core.validation import InputValidator, UUIDValidator
 from app.models import (
@@ -29,14 +37,72 @@ from services.download_service import download_service
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["downloads"])
 
+
+class EndpointErrorHandler:
+    """Centralized error handling for API endpoints"""
+    
+    @staticmethod
+    def _log_error(error_summary: Dict[str, Any], endpoint: str) -> None:
+        """Log error with context"""
+        logger.error(
+            f"Endpoint error in {endpoint}",
+            extra={"error_summary": error_summary}
+        )
+    
+    @staticmethod
+    def handle_api_exception(exc: APIException, endpoint: str) -> HTTPException:
+        """Handle known API exceptions"""
+        error_summary = log_error_summary(exc, f"Endpoint: {endpoint}")
+        EndpointErrorHandler._log_error(error_summary, endpoint)
+        return HTTPException(
+            status_code=exc.status_code,
+            detail=exc.to_dict()
+        )
+    
+    @staticmethod
+    def handle_timeout_error(exc: asyncio.TimeoutError, endpoint: str, operation: str) -> HTTPException:
+        """Handle timeout errors gracefully"""
+        error_summary = log_error_summary(exc, f"Endpoint: {endpoint}, Operation: {operation}")
+        EndpointErrorHandler._log_error(error_summary, endpoint)
+        return HTTPException(
+            status_code=408,
+            detail={
+                "error": "TIMEOUT",
+                "message": f"{operation} timed out",
+                "status_code": 408
+            }
+        )
+    
+    @staticmethod
+    def handle_generic_exception(exc: Exception, endpoint: str) -> HTTPException:
+        """Handle unexpected exceptions"""
+        error_summary = log_error_summary(exc, f"Endpoint: {endpoint}")
+        EndpointErrorHandler._log_error(error_summary, endpoint)
+        
+        # Don't expose internal error details to client
+        return HTTPException(
+            status_code=500,
+            detail={
+                "error": "INTERNAL_SERVER_ERROR",
+                "message": "An unexpected error occurred",
+                "status_code": 500
+            }
+        )
+
+
 # Helper function to check if feature is enabled
-def require_feature(feature_name: str):
+def require_feature(feature_name: str) -> None:
     """Check if feature is enabled, raise 403 if not"""
     if not is_feature_enabled(feature_name):
         raise HTTPException(
             status_code=403,
-            detail=f"Feature '{feature_name}' is disabled"
+            detail={
+                "error": "FEATURE_DISABLED",
+                "message": f"Feature '{feature_name}' is disabled",
+                "status_code": 403
+            }
         )
+
 
 # Video Info Endpoint
 @router.get("/info", response_model=VideoInfoResponse)
@@ -46,26 +112,57 @@ async def get_video_info(
     api_key: Optional[dict] = Depends(get_optional_api_key)
 ):
     """Get video information without downloading"""
-    require_feature("video_info")
+    endpoint = "get_video_info"
     
-    with ErrorContext("get_video_info"):
-        # Validate input
-        url = InputValidator.validate_info_request(url)
+    try:
+        require_feature("video_info")
         
-        logger.info(f"Video info requested: {url[:60]}... from {ip}")
-        
-        try:
-            info = await asyncio.wait_for(
-                download_service.get_video_info(url),
-                timeout=30
-            )
-            return VideoInfoResponse(**info)
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout getting video info: {url[:60]}")
-            raise HTTPException(status_code=408, detail="Request timeout")
-        except ValueError as e:
-            logger.warning(f"Invalid video info: {str(e)}")
-            raise HTTPException(status_code=400, detail=str(e))
+        with ErrorContext(endpoint):
+            # Validate input
+            try:
+                url = InputValidator.validate_info_request(url)
+            except ValueError as e:
+                logger.warning(f"Input validation failed: {str(e)}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "VALIDATION_ERROR",
+                        "message": str(e),
+                        "status_code": 400
+                    }
+                )
+            
+            logger.info(f"Video info requested: {url[:60]}... from {ip}")
+            
+            try:
+                info = await asyncio.wait_for(
+                    download_service.get_video_info(url),
+                    timeout=30
+                )
+                return VideoInfoResponse(**info)
+            except asyncio.TimeoutError:
+                raise EndpointErrorHandler.handle_timeout_error(
+                    asyncio.TimeoutError(),
+                    endpoint,
+                    "Video info retrieval"
+                )
+            except ValueError as e:
+                logger.warning(f"Invalid video info: {str(e)}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "INVALID_VIDEO_INFO",
+                        "message": str(e),
+                        "status_code": 400
+                    }
+                )
+    except HTTPException:
+        raise
+    except APIException as e:
+        raise EndpointErrorHandler.handle_api_exception(e, endpoint)
+    except Exception as e:
+        raise EndpointErrorHandler.handle_generic_exception(e, endpoint)
+
 
 # Download Endpoint
 @router.post("/download", response_model=TaskResponse)
@@ -77,44 +174,68 @@ async def create_download(
     db = Depends(get_db)
 ):
     """Create a new download task"""
-    require_feature("download")
+    endpoint = "create_download"
     
-    with ErrorContext("create_download"):
-        # Validate all input parameters
-        url, format_type, quality = InputValidator.validate_download_request(
-            str(request.url),
-            request.format,
-            request.quality,
-            request.mp3_title
-        )
+    try:
+        require_feature("download")
         
-        logger.info(f"Download task created: {url[:60]} format={format_type} from {ip}")
-        
-        try:
-            task_id = await asyncio.wait_for(
-                download_service.create_task(
-                    url=url,
-                    format_type=format_type,
-                    format_id=request.format_id,
-                    quality=quality,
-                    ip_address=ip,
-                    mp3_title=request.mp3_title,
-                    embed_thumbnail=request.embed_thumbnail
-                ),
-                timeout=10
-            )
+        with ErrorContext(endpoint):
+            # Validate all input parameters
+            try:
+                url, format_type, quality = InputValidator.validate_download_request(
+                    str(request.url),
+                    request.format,
+                    request.quality,
+                    request.mp3_title
+                )
+            except ValueError as e:
+                logger.warning(f"Input validation failed: {str(e)}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "VALIDATION_ERROR",
+                        "message": str(e),
+                        "status_code": 400
+                    }
+                )
             
-            queue_pos = await redis_manager.get_queue_position(task_id)
+            logger.info(f"Download task created: {url[:60]} format={format_type} from {ip}")
             
-            return TaskResponse(
-                task_id=task_id,
-                status="pending",
-                queue_position=queue_pos,
-                message="Task created and added to queue"
-            )
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout creating task for: {url[:60]}")
-            raise HTTPException(status_code=408, detail="Task creation timeout")
+            try:
+                task_id = await asyncio.wait_for(
+                    download_service.create_task(
+                        url=url,
+                        format_type=format_type,
+                        format_id=request.format_id,
+                        quality=quality,
+                        ip_address=ip,
+                        mp3_title=request.mp3_title,
+                        embed_thumbnail=request.embed_thumbnail
+                    ),
+                    timeout=10
+                )
+                
+                queue_pos = await redis_manager.get_queue_position(task_id)
+                
+                return TaskResponse(
+                    task_id=task_id,
+                    status="pending",
+                    queue_position=queue_pos,
+                    message="Task created and added to queue"
+                )
+            except asyncio.TimeoutError:
+                raise EndpointErrorHandler.handle_timeout_error(
+                    asyncio.TimeoutError(),
+                    endpoint,
+                    "Task creation"
+                )
+    except HTTPException:
+        raise
+    except APIException as e:
+        raise EndpointErrorHandler.handle_api_exception(e, endpoint)
+    except Exception as e:
+        raise EndpointErrorHandler.handle_generic_exception(e, endpoint)
+
 
 # Status Endpoint
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
@@ -124,28 +245,62 @@ async def get_task_status(
     db = Depends(get_db)
 ):
     """Get task status via polling"""
-    require_feature("status")
+    endpoint = "get_task_status"
     
-    with ErrorContext("get_task_status", task_id=task_id):
-        # Validate task ID
-        task_id = UUIDValidator.validate_or_raise(task_id)
+    try:
+        require_feature("status")
         
-        task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
-        if not task:
-            raise TaskNotFoundError(task_id)
-        
-        return TaskStatusResponse(
-            task_id=task.id,
-            status=task.status,
-            progress=task.progress,
-            filename=task.filename,
-            file_size=task.file_size,
-            title=task.title,
-            thumbnail_url=task.thumbnail_url,
-            error_message=task.error_message,
-            created_at=task.created_at,
-            completed_at=task.completed_at
-        )
+        with ErrorContext(endpoint, task_id=task_id):
+            # Validate task ID
+            try:
+                task_id = UUIDValidator.validate_or_raise(task_id)
+            except ValueError as e:
+                logger.warning(f"Invalid task ID: {task_id}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "INVALID_TASK_ID",
+                        "message": str(e),
+                        "status_code": 400
+                    }
+                )
+            
+            try:
+                task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
+                if not task:
+                    raise TaskNotFoundError(task_id)
+                
+                return TaskStatusResponse(
+                    task_id=task.id,
+                    status=task.status,
+                    progress=task.progress,
+                    filename=task.filename,
+                    file_size=task.file_size,
+                    title=task.title,
+                    thumbnail_url=task.thumbnail_url,
+                    error_message=task.error_message,
+                    created_at=task.created_at,
+                    completed_at=task.completed_at
+                )
+            except Exception as e:
+                if isinstance(e, APIException):
+                    raise
+                logger.error(f"Database error in {endpoint}: {str(e)}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "DATABASE_ERROR",
+                        "message": "Failed to retrieve task status",
+                        "status_code": 500
+                    }
+                )
+    except HTTPException:
+        raise
+    except APIException as e:
+        raise EndpointErrorHandler.handle_api_exception(e, endpoint)
+    except Exception as e:
+        raise EndpointErrorHandler.handle_generic_exception(e, endpoint)
+
 
 # Download File Endpoint
 @router.get("/download/{task_id}")
@@ -155,54 +310,88 @@ async def download_file(
     db = Depends(get_db)
 ):
     """Download the completed file"""
-    require_feature("file_download")
+    endpoint = "download_file"
     
-    with ErrorContext("download_file", task_id=task_id):
-        # Validate task ID
-        task_id = UUIDValidator.validate_or_raise(task_id)
+    try:
+        require_feature("file_download")
         
-        task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
-        if not task:
-            raise TaskNotFoundError(task_id)
-        
-        if task.status != "completed":
-            raise InvalidStateError(
-                current_state=task.status,
-                operation="download",
-                allowed_states=["completed"]
-            )
-        
-        if not task.file_path or not os.path.exists(task.file_path):
-            logger.error(f"File not found for task: {task_id}")
-            raise FileAccessError(task.file_path or "unknown", "File not found")
-        
-        # Security check: path traversal prevention
-        file_path = Path(task.file_path).resolve()
-        download_dir = Path(settings.DOWNLOAD_DIR).resolve()
-        
-        if not str(file_path).startswith(str(download_dir)):
-            logger.error(f"Path traversal attempt detected: {task_id}")
-            raise PathTraversalError(str(file_path))
-        
-        # Generate safe filename
-        if task.title:
-            safe_title = "".join(
-                c for c in task.title if c.isalnum() or c in (' ', '-', '_')
-            ).strip()
-            if len(safe_title) > 200:
-                safe_title = safe_title[:200]
-            download_filename = f"{safe_title}{file_path.suffix}"
-        else:
-            download_filename = task.filename or f"{task_id}.mp4"
-        
-        logger.info(f"File download initiated: {task_id} as {download_filename}")
-        
-        from fastapi.responses import FileResponse
-        return FileResponse(
-            path=str(file_path),
-            filename=download_filename,
-            media_type="application/octet-stream"
-        )
+        with ErrorContext(endpoint, task_id=task_id):
+            # Validate task ID
+            try:
+                task_id = UUIDValidator.validate_or_raise(task_id)
+            except ValueError as e:
+                logger.warning(f"Invalid task ID: {task_id}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "INVALID_TASK_ID",
+                        "message": str(e),
+                        "status_code": 400
+                    }
+                )
+            
+            try:
+                task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
+                if not task:
+                    raise TaskNotFoundError(task_id)
+                
+                if task.status != "completed":
+                    raise InvalidStateError(
+                        current_state=task.status,
+                        operation="download",
+                        allowed_states=["completed"]
+                    )
+                
+                if not task.file_path or not os.path.exists(task.file_path):
+                    logger.error(f"File not found for task: {task_id}")
+                    raise FileAccessError(task.file_path or "unknown", "File not found")
+                
+                # Security check: path traversal prevention
+                file_path = Path(task.file_path).resolve()
+                download_dir = Path(settings.DOWNLOAD_DIR).resolve()
+                
+                if not str(file_path).startswith(str(download_dir)):
+                    logger.error(f"Path traversal attempt detected: {task_id}")
+                    raise PathTraversalError(str(file_path))
+                
+                # Generate safe filename
+                if task.title:
+                    safe_title = "".join(
+                        c for c in task.title if c.isalnum() or c in (' ', '-', '_')
+                    ).strip()
+                    if len(safe_title) > 200:
+                        safe_title = safe_title[:200]
+                    download_filename = f"{safe_title}{file_path.suffix}"
+                else:
+                    download_filename = task.filename or f"{task_id}.mp4"
+                
+                logger.info(f"File download initiated: {task_id} as {download_filename}")
+                
+                from fastapi.responses import FileResponse
+                return FileResponse(
+                    path=str(file_path),
+                    filename=download_filename,
+                    media_type="application/octet-stream"
+                )
+            except Exception as e:
+                if isinstance(e, APIException) or isinstance(e, HTTPException):
+                    raise
+                logger.error(f"Error in {endpoint}: {str(e)}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "DOWNLOAD_ERROR",
+                        "message": "Failed to download file",
+                        "status_code": 500
+                    }
+                )
+    except HTTPException:
+        raise
+    except APIException as e:
+        raise EndpointErrorHandler.handle_api_exception(e, endpoint)
+    except Exception as e:
+        raise EndpointErrorHandler.handle_generic_exception(e, endpoint)
+
 
 # Cancel Task Endpoint
 @router.post("/cancel/{task_id}")
@@ -212,35 +401,72 @@ async def cancel_task(
     db = Depends(get_db)
 ):
     """Cancel a running download task"""
-    require_feature("cancel")
+    endpoint = "cancel_task"
     
-    with ErrorContext("cancel_task", task_id=task_id):
-        # Validate task ID
-        task_id = UUIDValidator.validate_or_raise(task_id)
+    try:
+        require_feature("cancel")
         
-        task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
-        if not task:
-            raise TaskNotFoundError(task_id)
-        
-        if task.status not in ["pending", "downloading"]:
-            raise InvalidStateError(
-                current_state=task.status,
-                operation="cancel",
-                allowed_states=["pending", "downloading"]
-            )
-        
-        try:
-            cancelled = await asyncio.wait_for(
-                download_service.cancel_task(task_id),
-                timeout=10
-            )
-            task.status = "cancelled"
-            db.commit()
-            logger.info(f"Task cancelled: {task_id}")
-            return {"message": "Task cancelled", "cancelled": cancelled}
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout cancelling task: {task_id}")
-            raise HTTPException(status_code=408, detail="Cancellation timeout")
+        with ErrorContext(endpoint, task_id=task_id):
+            # Validate task ID
+            try:
+                task_id = UUIDValidator.validate_or_raise(task_id)
+            except ValueError as e:
+                logger.warning(f"Invalid task ID: {task_id}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "INVALID_TASK_ID",
+                        "message": str(e),
+                        "status_code": 400
+                    }
+                )
+            
+            try:
+                task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
+                if not task:
+                    raise TaskNotFoundError(task_id)
+                
+                if task.status not in ["pending", "downloading"]:
+                    raise InvalidStateError(
+                        current_state=task.status,
+                        operation="cancel",
+                        allowed_states=["pending", "downloading"]
+                    )
+                
+                try:
+                    cancelled = await asyncio.wait_for(
+                        download_service.cancel_task(task_id),
+                        timeout=10
+                    )
+                    task.status = "cancelled"
+                    db.commit()
+                    logger.info(f"Task cancelled: {task_id}")
+                    return {"message": "Task cancelled", "cancelled": cancelled}
+                except asyncio.TimeoutError:
+                    raise EndpointErrorHandler.handle_timeout_error(
+                        asyncio.TimeoutError(),
+                        endpoint,
+                        "Task cancellation"
+                    )
+            except Exception as e:
+                if isinstance(e, APIException) or isinstance(e, HTTPException):
+                    raise
+                logger.error(f"Error in {endpoint}: {str(e)}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "CANCEL_ERROR",
+                        "message": "Failed to cancel task",
+                        "status_code": 500
+                    }
+                )
+    except HTTPException:
+        raise
+    except APIException as e:
+        raise EndpointErrorHandler.handle_api_exception(e, endpoint)
+    except Exception as e:
+        raise EndpointErrorHandler.handle_generic_exception(e, endpoint)
+
 
 # Delete Task Endpoint
 @router.delete("/task/{task_id}")
@@ -250,41 +476,72 @@ async def delete_task(
     db = Depends(get_db)
 ):
     """Delete a task and its file"""
-    require_feature("delete")
+    endpoint = "delete_task"
     
-    with ErrorContext("delete_task", task_id=task_id):
-        # Validate task ID
-        task_id = UUIDValidator.validate_or_raise(task_id)
+    try:
+        require_feature("delete")
         
-        task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
-        if not task:
-            raise TaskNotFoundError(task_id)
-        
-        # Delete file if exists
-        if task.file_path:
+        with ErrorContext(endpoint, task_id=task_id):
+            # Validate task ID
             try:
-                file_path = Path(task.file_path).resolve()
-                download_dir = Path(settings.DOWNLOAD_DIR).resolve()
+                task_id = UUIDValidator.validate_or_raise(task_id)
+            except ValueError as e:
+                logger.warning(f"Invalid task ID: {task_id}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "INVALID_TASK_ID",
+                        "message": str(e),
+                        "status_code": 400
+                    }
+                )
+            
+            try:
+                task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
+                if not task:
+                    raise TaskNotFoundError(task_id)
                 
-                # Security check
-                if not str(file_path).startswith(str(download_dir)):
-                    logger.warning(f"File path validation failed for deletion: {task_id}")
-                    raise PathTraversalError(str(file_path))
+                # Delete file if exists
+                if task.file_path:
+                    try:
+                        file_path = Path(task.file_path).resolve()
+                        download_dir = Path(settings.DOWNLOAD_DIR).resolve()
+                        
+                        # Security check
+                        if not str(file_path).startswith(str(download_dir)):
+                            logger.warning(f"File path validation failed for deletion: {task_id}")
+                            raise PathTraversalError(str(file_path))
+                        
+                        if file_path.exists():
+                            file_path.unlink()
+                            logger.info(f"File deleted for task: {task_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to delete file for task {task_id}: {e}")
+                        # Don't fail the entire operation if file deletion fails
                 
-                if file_path.exists():
-                    file_path.unlink()
-                    logger.info(f"File deleted for task: {task_id}")
+                db.delete(task)
+                db.commit()
+                logger.info(f"Task deleted: {task_id}")
+                return {"message": "Task deleted"}
             except Exception as e:
-                logger.error(f"Failed to delete file for task {task_id}: {e}")
-        
-        try:
-            db.delete(task)
-            db.commit()
-            logger.info(f"Task deleted: {task_id}")
-            return {"message": "Task deleted"}
-        except Exception as e:
-            logger.error(f"Error deleting task {task_id}: {e}")
-            raise HTTPException(status_code=500, detail="Failed to delete task")
+                if isinstance(e, APIException) or isinstance(e, HTTPException):
+                    raise
+                logger.error(f"Error deleting task {task_id}: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "DELETE_ERROR",
+                        "message": "Failed to delete task",
+                        "status_code": 500
+                    }
+                )
+    except HTTPException:
+        raise
+    except APIException as e:
+        raise EndpointErrorHandler.handle_api_exception(e, endpoint)
+    except Exception as e:
+        raise EndpointErrorHandler.handle_generic_exception(e, endpoint)
+
 
 # List Tasks Endpoint
 @router.get("/tasks")
@@ -295,37 +552,61 @@ async def list_tasks(
     db = Depends(get_db)
 ):
     """List all tasks (optionally filtered by status)"""
-    require_feature("list_tasks")
+    endpoint = "list_tasks"
     
-    with ErrorContext("list_tasks"):
-        query = db.query(DownloadTask)
+    try:
+        require_feature("list_tasks")
         
-        if status:
+        with ErrorContext(endpoint):
             valid_statuses = ["pending", "downloading", "completed", "failed", "cancelled"]
-            if status not in valid_statuses:
+            
+            if status and status not in valid_statuses:
+                logger.warning(f"Invalid status filter: {status}")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid status. Must be one of: {valid_statuses}"
+                    detail={
+                        "error": "INVALID_STATUS",
+                        "message": f"Invalid status. Must be one of: {valid_statuses}",
+                        "status_code": 400
+                    }
                 )
-            query = query.filter(DownloadTask.status == status)
-        
-        try:
-            tasks = query.order_by(DownloadTask.created_at.desc()).limit(limit).all()
-            return [
-                {
-                    "task_id": task.id,
-                    "url": task.url,
-                    "status": task.status,
-                    "progress": task.progress,
-                    "title": task.title,
-                    "format": task.format,
-                    "created_at": task.created_at.isoformat()
-                }
-                for task in tasks
-            ]
-        except Exception as e:
-            logger.error(f"Error listing tasks: {e}")
-            raise HTTPException(status_code=500, detail="Failed to retrieve tasks")
+            
+            try:
+                query = db.query(DownloadTask)
+                
+                if status:
+                    query = query.filter(DownloadTask.status == status)
+                
+                tasks = query.order_by(DownloadTask.created_at.desc()).limit(limit).all()
+                return [
+                    {
+                        "task_id": task.id,
+                        "url": task.url,
+                        "status": task.status,
+                        "progress": task.progress,
+                        "title": task.title,
+                        "format": task.format,
+                        "created_at": task.created_at.isoformat()
+                    }
+                    for task in tasks
+                ]
+            except Exception as e:
+                logger.error(f"Error listing tasks: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "LIST_ERROR",
+                        "message": "Failed to retrieve tasks",
+                        "status_code": 500
+                    }
+                )
+    except HTTPException:
+        raise
+    except APIException as e:
+        raise EndpointErrorHandler.handle_api_exception(e, endpoint)
+    except Exception as e:
+        raise EndpointErrorHandler.handle_generic_exception(e, endpoint)
+
 
 # Get Thumbnail Endpoint
 @router.get("/thumbnail/{task_id}")
@@ -335,20 +616,54 @@ async def get_thumbnail(
     db = Depends(get_db)
 ):
     """Get thumbnail URL for a task"""
-    require_feature("thumbnail")
+    endpoint = "get_thumbnail"
     
-    with ErrorContext("get_thumbnail", task_id=task_id):
-        # Validate task ID
-        task_id = UUIDValidator.validate_or_raise(task_id)
+    try:
+        require_feature("thumbnail")
         
-        task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
-        if not task:
-            raise TaskNotFoundError(task_id)
-        
-        if not task.thumbnail_url:
-            raise FileAccessError("unknown", "Thumbnail not available")
-        
-        return {"thumbnail_url": task.thumbnail_url}
+        with ErrorContext(endpoint, task_id=task_id):
+            # Validate task ID
+            try:
+                task_id = UUIDValidator.validate_or_raise(task_id)
+            except ValueError as e:
+                logger.warning(f"Invalid task ID: {task_id}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "INVALID_TASK_ID",
+                        "message": str(e),
+                        "status_code": 400
+                    }
+                )
+            
+            try:
+                task = db.query(DownloadTask).filter(DownloadTask.id == task_id).first()
+                if not task:
+                    raise TaskNotFoundError(task_id)
+                
+                if not task.thumbnail_url:
+                    raise FileAccessError("unknown", "Thumbnail not available")
+                
+                return {"thumbnail_url": task.thumbnail_url}
+            except Exception as e:
+                if isinstance(e, APIException) or isinstance(e, HTTPException):
+                    raise
+                logger.error(f"Error in {endpoint}: {str(e)}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "THUMBNAIL_ERROR",
+                        "message": "Failed to retrieve thumbnail",
+                        "status_code": 500
+                    }
+                )
+    except HTTPException:
+        raise
+    except APIException as e:
+        raise EndpointErrorHandler.handle_api_exception(e, endpoint)
+    except Exception as e:
+        raise EndpointErrorHandler.handle_generic_exception(e, endpoint)
+
 
 # Download Subtitles Endpoint
 @router.get("/subtitles")
@@ -359,31 +674,55 @@ async def get_subtitles(
     api_key: Optional[dict] = Depends(get_optional_api_key)
 ):
     """Download subtitles for a video"""
-    require_feature("subtitles")
+    endpoint = "get_subtitles"
     
-    with ErrorContext("get_subtitles"):
-        # Validate input
-        url, lang = InputValidator.validate_subtitle_request(url, lang)
+    try:
+        require_feature("subtitles")
         
-        logger.info(f"Subtitles requested: {url[:60]} lang={lang} from {ip}")
-        
-        try:
-            subtitles = await asyncio.wait_for(
-                download_service.get_subtitles(url, lang),
-                timeout=60
-            )
+        with ErrorContext(endpoint):
+            # Validate input
+            try:
+                url, lang = InputValidator.validate_subtitle_request(url, lang)
+            except ValueError as e:
+                logger.warning(f"Input validation failed: {str(e)}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "VALIDATION_ERROR",
+                        "message": str(e),
+                        "status_code": 400
+                    }
+                )
             
-            if not subtitles:
-                raise FileAccessError(url, "Subtitles not found")
+            logger.info(f"Subtitles requested: {url[:60]} lang={lang} from {ip}")
             
-            return {
-                "url": url,
-                "language": lang,
-                "subtitles": subtitles
-            }
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout getting subtitles: {url[:60]}")
-            raise HTTPException(status_code=408, detail="Subtitle download timeout")
+            try:
+                subtitles = await asyncio.wait_for(
+                    download_service.get_subtitles(url, lang),
+                    timeout=60
+                )
+                
+                if not subtitles:
+                    raise FileAccessError(url, "Subtitles not found")
+                
+                return {
+                    "url": url,
+                    "language": lang,
+                    "subtitles": subtitles
+                }
+            except asyncio.TimeoutError:
+                raise EndpointErrorHandler.handle_timeout_error(
+                    asyncio.TimeoutError(),
+                    endpoint,
+                    "Subtitle download"
+                )
+    except HTTPException:
+        raise
+    except APIException as e:
+        raise EndpointErrorHandler.handle_api_exception(e, endpoint)
+    except Exception as e:
+        raise EndpointErrorHandler.handle_generic_exception(e, endpoint)
+
 
 # Queue Stats Endpoint
 @router.get("/queue/stats")
@@ -391,20 +730,36 @@ async def get_queue_stats(
     api_key: Optional[dict] = Depends(get_optional_api_key)
 ):
     """Get queue statistics"""
-    require_feature("queue_stats")
+    endpoint = "get_queue_stats"
     
-    with ErrorContext("get_queue_stats"):
-        try:
-            active = await redis_manager.get_active_downloads()
-            pending_count = await redis_manager.get_queue_length()
-            
-            return {
-                "active_downloads": len(active),
-                "pending_tasks": pending_count,
-                "max_concurrent": settings.MAX_CONCURRENT_DOWNLOADS,
-                "available_slots": settings.MAX_CONCURRENT_DOWNLOADS - len(active),
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        except Exception as e:
-            logger.error(f"Error getting queue stats: {e}")
-            raise HTTPException(status_code=500, detail="Failed to get queue statistics")
+    try:
+        require_feature("queue_stats")
+        
+        with ErrorContext(endpoint):
+            try:
+                active = await redis_manager.get_active_downloads()
+                pending_count = await redis_manager.get_queue_length()
+                
+                return {
+                    "active_downloads": len(active),
+                    "pending_tasks": pending_count,
+                    "max_concurrent": settings.MAX_CONCURRENT_DOWNLOADS,
+                    "available_slots": settings.MAX_CONCURRENT_DOWNLOADS - len(active),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            except Exception as e:
+                logger.error(f"Error getting queue stats: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "STATS_ERROR",
+                        "message": "Failed to get queue statistics",
+                        "status_code": 500
+                    }
+                )
+    except HTTPException:
+        raise
+    except APIException as e:
+        raise EndpointErrorHandler.handle_api_exception(e, endpoint)
+    except Exception as e:
+        raise EndpointErrorHandler.handle_generic_exception(e, endpoint)
