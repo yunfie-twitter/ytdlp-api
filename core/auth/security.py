@@ -28,10 +28,12 @@ async def check_rate_limit(request_ip: str) -> str:
         limit = settings.RATE_LIMIT_PER_MINUTE
         key = f"rate_limit:{request_ip}"
         
-        current = await _redis_manager.increment(key)
+        # Use increment_stat instead of non-existent increment method
+        current = await _redis_manager.increment_stat(key)
         
         if current == 1:
-            await _redis_manager.expire(key, 60)
+            # Set expiration for the key
+            await _redis_manager.redis.expire(key, 60)
         
         if current > limit:
             logger.warning(f"Rate limit exceeded for IP: {request_ip}")
