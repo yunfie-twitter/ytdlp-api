@@ -16,3 +16,5 @@ downloads/
 .idea/
 *.log
 .pytest_cache/
+db/
+redis/
