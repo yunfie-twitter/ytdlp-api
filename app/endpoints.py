@@ -168,7 +168,6 @@ async def get_video_info(
 @router.post("/download", response_model=TaskResponse)
 async def create_download(
     request: DownloadRequest,
-    req: Request,
     ip: str = Depends(check_rate_limit),
     api_key: Optional[dict] = Depends(get_optional_api_key),
     db = Depends(get_db)

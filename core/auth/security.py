@@ -1,7 +1,7 @@
 """Security utilities and middleware"""
 import logging
 from typing import Optional
-from fastapi import Depends, HTTPException, Header
+from fastapi import Depends, HTTPException, Header, Request
 
 from core.config.settings import settings
 from core.auth.jwt_auth import jwt_auth
@@ -18,34 +18,63 @@ def set_redis_manager(manager):
     global _redis_manager
     _redis_manager = manager
 
-async def check_rate_limit(request_ip: str) -> str:
-    """Check rate limit for IP address"""
+def _get_client_ip(request: Request) -> str:
+    """
+    Extract client IP address from request.
+    Handles X-Forwarded-For header for proxied requests.
+    """
+    # Check for X-Forwarded-For header (set by reverse proxy)
+    if "X-Forwarded-For" in request.headers:
+        # X-Forwarded-For can contain multiple IPs, take the first one
+        ips = request.headers["X-Forwarded-For"].split(",")
+        return ips[0].strip()
+    
+    # Check for X-Real-IP header (set by some proxies)
+    if "X-Real-IP" in request.headers:
+        return request.headers["X-Real-IP"].strip()
+    
+    # Fall back to direct client IP
+    if request.client:
+        return request.client.host
+    
+    # Default fallback
+    return "0.0.0.0"
+
+async def check_rate_limit(request: Request) -> str:
+    """
+    Check rate limit for client IP address.
+    Automatically extracts IP from request.
+    Returns the client IP address.
+    """
+    # Get client IP automatically
+    client_ip = _get_client_ip(request)
+    
     if _redis_manager is None:
         logger.warning("Redis manager not set for rate limiting")
-        return request_ip
+        return client_ip
     
     try:
         limit = settings.RATE_LIMIT_PER_MINUTE
-        key = f"rate_limit:{request_ip}"
+        key = f"rate_limit:{client_ip}"
         
-        # Use increment_stat instead of non-existent increment method
+        # Use increment_stat to increment the counter
         current = await _redis_manager.increment_stat(key)
         
         if current == 1:
-            # Set expiration for the key
+            # Set expiration for the key (60 seconds)
             await _redis_manager.redis.expire(key, 60)
         
         if current > limit:
-            logger.warning(f"Rate limit exceeded for IP: {request_ip}")
-            raise RateLimitError(request_ip, limit, 60)
+            logger.warning(f"Rate limit exceeded for IP: {client_ip}")
+            raise RateLimitError(client_ip, limit, 60)
         
-        return request_ip
+        return client_ip
     except RateLimitError:
         raise
     except Exception as e:
-        logger.error(f"Error checking rate limit: {e}")
+        logger.error(f"Error checking rate limit for {client_ip}: {e}")
         # Graceful degradation: allow request if Redis fails
-        return request_ip
+        return client_ip
 
 async def verify_api_key(
     authorization: Optional[str] = Header(None)
