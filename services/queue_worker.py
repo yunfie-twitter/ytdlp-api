@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from sqlalchemy import and_
 
-from core.error_handler import ErrorContext, retry
+from core.error_handling import ErrorContext
 from core.config import settings
 from infrastructure.redis_manager import redis_manager
 from infrastructure.progress_tracker import progress_tracker
