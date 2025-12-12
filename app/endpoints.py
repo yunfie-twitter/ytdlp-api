@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Request, Query
 
 from core.config import settings
-from core import check_rate_limit, is_feature_enabled, get_optional_api_key, ErrorContext, async_error_handler
+from core import check_rate_limit, is_feature_enabled, get_optional_api_key, ErrorContext
 from core.exceptions import (
     TaskNotFoundError,
     InvalidStateError,
@@ -40,7 +40,6 @@ def require_feature(feature_name: str):
 
 # Video Info Endpoint
 @router.get("/info", response_model=VideoInfoResponse)
-@async_error_handler("get_video_info")
 async def get_video_info(
     url: str,
     ip: str = Depends(check_rate_limit),
@@ -70,7 +69,6 @@ async def get_video_info(
 
 # Download Endpoint
 @router.post("/download", response_model=TaskResponse)
-@async_error_handler("create_download")
 async def create_download(
     request: DownloadRequest,
     req: Request,
@@ -354,7 +352,6 @@ async def get_thumbnail(
 
 # Download Subtitles Endpoint
 @router.get("/subtitles")
-@async_error_handler("get_subtitles")
 async def get_subtitles(
     url: str,
     lang: str = Query("en"),
