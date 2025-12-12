@@ -1,4 +1,4 @@
 """Configuration management module"""
-from core.config.settings import settings
+from core.config.settings import Settings, settings
 
-__all__ = ['settings']
+__all__ = ['Settings', 'settings']
