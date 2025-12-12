@@ -35,7 +35,7 @@ from core.exceptions import (
     DatabaseError,
     YtDlpError,
     RateLimitError,
-    TimeoutError as TimeoutErrorException,
+    TimeoutError,
     InvalidStateError,
     FileAccessError,
     PathTraversalError,
@@ -57,7 +57,8 @@ from core.error_handling import (
     DocumentationAnalyzer,
     StyleChecker,
     RefactoringHelper,
-    MetricsCollector
+    MetricsCollector,
+    metrics_collector
 )
 
 # Validation
@@ -143,7 +144,7 @@ __all__ = [
     'DatabaseError',
     'YtDlpError',
     'RateLimitError',
-    'TimeoutErrorException',
+    'TimeoutError',
     'InvalidStateError',
     'FileAccessError',
     'PathTraversalError',
@@ -163,6 +164,7 @@ __all__ = [
     'StyleChecker',
     'RefactoringHelper',
     'MetricsCollector',
+    'metrics_collector',
     # Validation
     'URLValidator',
     'UUIDValidator',
