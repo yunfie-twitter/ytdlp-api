@@ -17,6 +17,7 @@ import httpx
 from core.config import settings
 from infrastructure.redis_manager import redis_manager
 from infrastructure.database import get_db, DownloadTask
+from services.job_manager import job_queue, JobPriority
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +227,14 @@ class DownloadService:
         finally:
             db.close()
         
-        await redis_manager.add_to_queue(task_id)
+        # Add to job queue for processing
+        await job_queue.enqueue(
+            task_id=task_id,
+            priority=JobPriority.NORMAL,
+            max_retries=3,
+            timeout=3600
+        )
+        
         logger.info(f"Task created: {task_id}")
         
         return task_id
