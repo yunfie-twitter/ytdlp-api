@@ -217,6 +217,18 @@ class RedisManager:
         except Exception as e:
             logger.error(f"Failed to set progress: {e}")
             return False
+    
+    async def get_queue_position(self, task_id: str) -> int:
+        """Get task position in the pending queue (0-indexed, -1 if not in queue)"""
+        try:
+            # Get the list of all pending tasks
+            queue = await self.redis.lrange("pending_tasks", 0, -1)
+            if task_id in queue:
+                return queue.index(task_id)
+            return -1  # Task not in queue
+        except Exception as e:
+            logger.error(f"Failed to get queue position for task {task_id}: {e}")
+            return -1
 
 # Global instance
 redis_manager = RedisManager()
