@@ -31,11 +31,11 @@ class APIException(Exception):
 # Input Validation Errors
 class ValidationError(APIException):
     """Raised when input validation fails"""
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+    def __init__(self, message: str, error_code: str = "VALIDATION_ERROR", details: Optional[Dict[str, Any]] = None):
         super().__init__(
             message=message,
             status_code=400,
-            error_code="VALIDATION_ERROR",
+            error_code=error_code,
             details=details
         )
 
