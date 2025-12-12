@@ -202,10 +202,11 @@ def sync_retry(config: RetryConfig):
         return wrapper
     return decorator
 
-def log_error_summary(errors: list) -> Dict:
-    """Generate error summary"""
+def log_error_summary(exception: Exception, context: str = "") -> Dict[str, Any]:
+    """Generate error summary from exception with optional context"""
     return {
-        "total_errors": len(errors),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "errors": errors
+        "exception_type": type(exception).__name__,
+        "message": str(exception),
+        "context": context,
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }

@@ -65,9 +65,10 @@ def register_exception_handlers(app: FastAPI):
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         """Handle unexpected exceptions"""
-        # Log detailed error summary
-        error_summary = log_error_summary(exc, f"Path: {request.url.path}")
-        logger.error(error_summary)
+        # Log detailed error summary with context
+        error_context = f"Path: {request.url.path} | Method: {request.method}"
+        error_summary = log_error_summary(exc, error_context)
+        logger.error(f"Unexpected error: {error_summary}")
         
         # Create user-friendly response
         internal_error = InternalServerError(
