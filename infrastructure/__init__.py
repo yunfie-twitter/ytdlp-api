@@ -1,14 +1,40 @@
-"""Infrastructure layer - database, caching, and service integrations"""
-from infrastructure.database import init_db
-from infrastructure.redis_manager import redis_manager
-from infrastructure.progress_tracker import ProgressTracker
-from infrastructure.websocket_manager import WebSocketManager
-from infrastructure.resource_pool import ResourcePool
+"""Infrastructure layer with resilience and monitoring"""
+
+from infrastructure.database_resilience import (
+    DatabaseRetryPolicy,
+    TransactionManager,
+    QueryTimeout,
+    DatabaseHealthCheck,
+    db_retry_policy,
+)
+from infrastructure.redis_resilience import (
+    RedisRetryPolicy,
+    RedisFallbackCache,
+    redis_retry_policy,
+    redis_fallback_cache,
+)
+from infrastructure.connection_pool import (
+    ConnectionPoolMonitor,
+    PoolOptimizer,
+    pool_monitor,
+    pool_optimizer,
+)
 
 __all__ = [
-    'init_db',
-    'redis_manager',
-    'ProgressTracker',
-    'WebSocketManager',
-    'ResourcePool'
+    # Database Resilience
+    "DatabaseRetryPolicy",
+    "TransactionManager",
+    "QueryTimeout",
+    "DatabaseHealthCheck",
+    "db_retry_policy",
+    # Redis Resilience
+    "RedisRetryPolicy",
+    "RedisFallbackCache",
+    "redis_retry_policy",
+    "redis_fallback_cache",
+    # Connection Pool
+    "ConnectionPoolMonitor",
+    "PoolOptimizer",
+    "pool_monitor",
+    "pool_optimizer",
 ]
