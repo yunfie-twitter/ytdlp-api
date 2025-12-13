@@ -1,4 +1,11 @@
-"""Configuration management module"""
-from core.config.settings import Settings, settings
+"""Configuration and validation module"""
 
-__all__ = ['Settings', 'settings']
+from core.config.validation import (
+    ConfigValidator,
+    validate_application_config,
+)
+
+__all__ = [
+    "ConfigValidator",
+    "validate_application_config",
+]
