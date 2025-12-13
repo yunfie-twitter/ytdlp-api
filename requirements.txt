@@ -16,6 +16,10 @@ yt-dlp-ejs>=0.3.0
 
 # Audio/Media Processing
 mutagen>=1.47.0
+# NOTE: ffmpeg must be installed separately on your system
+# apt install ffmpeg (Ubuntu/Debian)
+# brew install ffmpeg (macOS)
+# choco install ffmpeg (Windows)
 
 # HTTP & Web
 python-multipart>=0.0.6
